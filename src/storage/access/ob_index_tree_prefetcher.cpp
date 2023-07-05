@@ -911,7 +911,9 @@ int ObIndexTreeMultiPassPrefetcher<DATA_PREFETCH_DEPTH, INDEX_PREFETCH_DEPTH>::p
     LOG_WARN("Fail to add query range", K(ret));
   } else {
     int16_t border_level = MIN(cur_level_ + 2, index_tree_height_);
+    // 边界层=上次访问的层+深入2层
     for (int16_t level = 1; OB_SUCC(ret) && level < border_level; level++) {
+      // 从root遍历
       if (tree_handles_[level].is_prefetch_end()) {
       } else if (OB_FAIL(tree_handles_[level].prefetch(
                   *index_read_info_,

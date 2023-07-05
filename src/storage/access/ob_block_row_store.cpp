@@ -132,6 +132,7 @@ int ObBlockRowStore::apply_blockscan(
                                         micro_scanner,
                                         nullptr,
                                         pd_filter_info_.filter_))) {
+    // 在block reader中应用算子下推，自顶向下递归filter node tree
     LOG_WARN("Failed to apply pushdown filter in block reader", K(ret), K(*this));
   } else {
     filter_applied_ = true;
@@ -154,6 +155,8 @@ int ObBlockRowStore::apply_blockscan(
   return ret;
 }
 
+// 自顶向下
+// 递归遍历filter node tree，获取执行结果（使用filter->get_result()得到bitmap）
 int ObBlockRowStore::filter_micro_block(
     const int64_t row_count,
      blocksstable::ObIMicroBlockRowScanner &micro_scanner,
@@ -171,16 +174,21 @@ int ObBlockRowStore::filter_micro_block(
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null filter bitmap", K(ret));
   } else if (nullptr != parent && OB_FAIL(parent->prepare_skip_filter())) {
+    // TODO: 不懂什么意思
     LOG_WARN("Failed to check parent blockscan", K(ret));
   } else if (filter->is_filter_node()) {
+    // 当前filter节点是filter节点（一个简单过滤条件），直接执行
     if (OB_FAIL(micro_scanner.filter_pushdown_filter(parent, filter, pd_filter_info_, *result))) {
       LOG_WARN("Failed to filter pushdown filter", K(ret), KPC(filter));
     }
   } else if (filter->is_logic_op_node()) {
+    // 当前filter节点是逻辑节点（and、or等），递归计算子节点再合并结果
     if (OB_UNLIKELY(filter->get_child_count() < 2)) {
+      // 具有单个子节点，无法进行多目逻辑运算
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("Unexpected child count of filter executor", K(ret), K(filter->get_child_count()), KP(filter));
     } else {
+      // 遍历每个子节点，执行filter（递归调用本函数）、获取result（bit map）、根据and或or对结果进行逻辑合并
       sql::ObPushdownFilterExecutor **children = filter->get_childs();
       for (uint32_t i = 0; OB_SUCC(ret) && i < filter->get_child_count(); i++) {
         const common::ObBitmap *child_result = nullptr;
@@ -194,12 +202,16 @@ int ObBlockRowStore::filter_micro_block(
           LOG_WARN("Unexpected get null filter bitmap", K(ret));
         } else {
           if (filter->is_logic_and_node()) {
+            // 逻辑与
             if (OB_FAIL(result->bit_and(*child_result))) {
+              // bitmap 逻辑与
               LOG_WARN("Failed to merge result bitmap", K(ret), KP(child_result));
             } else if (result->is_all_false()) {
+              // 短路
               break;
             }
           } else  {
+            // 逻辑或
             if (OB_FAIL(result->bit_or(*child_result))) {
               LOG_WARN("Failed to merge result bitmap", K(ret), KP(child_result));
             } else if (result->is_all_true()) {

@@ -240,6 +240,10 @@ int ObDASRef::execute_all_task()
     while (finished_cnt < aggregated_tasks_.get_size() && OB_SUCC(ret)) {
       finished_cnt = 0;
       // execute tasks follows aggregated task state machine.
+      // 状态机：异步执行任务，先执行高优先级任务，再执行其他任务
+      
+      // 主要：执行任务都是用的ObDataAccessService::execute_das_task
+      // 开启DAS Task分区相关的事务控制，并执行task对应的op
       if (has_unstart_high_priority_tasks) {
         high_priority_task_execution_cnt = 0;
         DLIST_FOREACH_X(curr, aggregated_tasks_.get_obj_list(), OB_SUCC(ret)) {
@@ -254,6 +258,7 @@ int ObDASRef::execute_all_task()
           }
         }
         if (high_priority_task_execution_cnt == 0) {
+          // 疑问：这里为什么和0比较，而不是和高优先级任务总数比较？
           has_unstart_high_priority_tasks = false;
         }
       }
@@ -281,6 +286,7 @@ int ObDASRef::execute_all_task()
         }
       }
       // wait all existing tasks to be finished
+      // 同步点：等待所有任务完成
       if (OB_SUCC(ret) && OB_FAIL(wait_executing_tasks())) {
         LOG_WARN("failed to process all async remote tasks", K(ret));
         if (check_rcode_can_retry(ret, batched_tasks_.get_last_node()->get_obj()->get_ref_table_id())) {
@@ -289,6 +295,7 @@ int ObDASRef::execute_all_task()
       }
       if (OB_SUCC(ret)) {
         // check das task status.
+        // 检查 das task 状态：未开始的等待开始，失败的重试
         DLIST_FOREACH_X(curr, aggregated_tasks_.get_obj_list(), OB_SUCC(ret)) {
           ObDasAggregatedTasks* aggregated_task = curr->get_obj();
           if (aggregated_task->has_unstart_tasks()) {
@@ -297,6 +304,7 @@ int ObDASRef::execute_all_task()
                 LOG_WARN("failed das aggreagted task cannot retry.", K(ret));
               } else {
                 // retry all failed tasks.
+                // 失败的task进行重试
                 common::ObSEArray<ObIDASTaskOp *, 2> failed_tasks;
                 int tmp_ret = OB_SUCCESS;
                 if (OB_TMP_FAIL(aggregated_task->get_failed_tasks(failed_tasks))) {

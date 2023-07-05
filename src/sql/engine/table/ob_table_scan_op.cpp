@@ -640,16 +640,21 @@ OB_INLINE int ObTableScanOp::create_one_das_task(ObDASTabletLoc *tablet_loc)
   if (OB_LIKELY(has_das_scan_op(tablet_loc, scan_op))) {
     // reuse das scan op
   } else if (OB_FAIL(das_ref_.create_das_task(tablet_loc, op_type, task_op))) {
+     // 创建das_task
     LOG_WARN("prepare das task failed", K(ret));
   } else {
+    // 设置scan的ctdef、rtdef
     scan_op = static_cast<ObDASScanOp*>(task_op);
     scan_op->set_scan_ctdef(&MY_CTDEF.scan_ctdef_);
     scan_op->set_scan_rtdef(&tsc_rtdef_.scan_rtdef_);
     scan_op->set_can_part_retry(nullptr == tsc_rtdef_.scan_rtdef_.sample_info_
                                 && ctx_.get_my_session()->is_user_session());
     tsc_rtdef_.scan_rtdef_.table_loc_->is_reading_ = true;
+    // 如果判断是local index loopkup, 就还需要设置 lookup 的 ctdef
     if (!MY_SPEC.is_index_global_ && MY_CTDEF.lookup_ctdef_ != nullptr) {
       //is local index lookup, need to set the lookup ctdef to the das scan op
+      // 什么是 local index lookup?
+      // 什么是 lookup ctdef?
       ObDASTableLoc *lookup_table_loc = tsc_rtdef_.lookup_rtdef_->table_loc_;
       ObDASTabletLoc *lookup_tablet_loc = ObDASUtils::get_related_tablet_loc(
           *tablet_loc, lookup_table_loc->loc_meta_->ref_table_id_);
@@ -667,6 +672,7 @@ OB_INLINE int ObTableScanOp::create_one_das_task(ObDASTabletLoc *tablet_loc)
       }
     }
   }
+  // 最后通过 tablet(partition) id 修剪 query range
   if (OB_SUCC(ret)) {
     if (OB_FAIL(cherry_pick_range_by_tablet_id(scan_op))) {
       LOG_WARN("prune query range by partition id failed", K(ret), KPC(tablet_loc));
@@ -716,10 +722,12 @@ int ObTableScanOp::prepare_das_task()
   int ret = OB_SUCCESS;
   ObTaskExecutorCtx &task_exec_ctx = ctx_.get_task_exec_ctx();
   if (OB_LIKELY(!MY_SPEC.use_dist_das_)) {
+    // 普通das, 根据tablet_loc_创建一个das task
     if (OB_FAIL(create_one_das_task(MY_INPUT.tablet_loc_))) {
       LOG_WARN("create one das task failed", K(ret));
     }
   } else if (OB_LIKELY(nullptr == MY_CTDEF.das_dppr_tbl_)) {
+    // 分布式das, 每个tablet创建一个das task
     ObDASTableLoc *table_loc = tsc_rtdef_.scan_rtdef_.table_loc_;
     for (DASTabletLocListIter node = table_loc->tablet_locs_begin();
          OB_SUCC(ret) && node != table_loc->tablet_locs_end(); ++node) {
@@ -729,6 +737,7 @@ int ObTableScanOp::prepare_das_task()
       }
     }
   } else {
+    // 动态partition的情况? 暂略
     // dynamic partitions
     ObPhysicalPlanCtx *plan_ctx = ctx_.get_physical_plan_ctx();
     ObDataTypeCastParams dtc_params = ObBasicSessionInfo::create_dtc_params(ctx_.get_my_session());
@@ -762,6 +771,8 @@ int ObTableScanOp::prepare_all_das_tasks()
 {
   int ret = OB_SUCCESS;
   if (MY_SPEC.batch_scan_flag_) {
+    // 如果是 batch scan，设置 group_size_
+    // MY_SPEC.batch_scan_flag_ 表示什么？batch scan表示什么？
     if (OB_SUCC(ret)) {
       group_size_ = tsc_rtdef_.bnlj_params_.at(0).second->count_;
       if (OB_UNLIKELY(group_size_ > max_group_size_)) {
@@ -776,6 +787,7 @@ int ObTableScanOp::prepare_all_das_tasks()
         LOG_WARN("prepare das task failed", K(ret));
       }
     } else {
+      // 迭代每个 batch group（如果有）
       int64_t group_size = MY_SPEC.batch_scan_flag_ ? group_size_ : 1;
       for (int64_t i = 0; OB_SUCC(ret) && i < group_size; ++i) {
         if (MY_SPEC.batch_scan_flag_) {
@@ -783,8 +795,10 @@ int ObTableScanOp::prepare_all_das_tasks()
           range_buffer_idx_ = i;
         }
         if (OB_FAIL(prepare_single_scan_range(i))) {
+          // 获取 query range
           LOG_WARN("prepare single scan range failed", K(ret));
         } else if (OB_FAIL(prepare_das_task())) {
+          // 创建 das task
           LOG_WARN("prepare das task failed", K(ret));
         } else {
           MY_INPUT.key_ranges_.reuse();
@@ -794,6 +808,8 @@ int ObTableScanOp::prepare_all_das_tasks()
     }
   }
   if (OB_SUCC(ret)) {
+    // 初始化 das group range
+    // 有何用意？
     if (OB_FAIL(init_das_group_range(0, group_size_))) {
       LOG_WARN("set group range failed", K(ret), K_(group_size));
     }
@@ -1683,13 +1699,16 @@ int ObTableScanOp::get_next_row_with_das()
   //it means multi-partition limit pushed down in DAS TSC
   //need to calc final limit row
   if (need_final_limit_ && limit_param_.limit_ > 0 && output_row_cnt_ >= limit_param_.limit_) {
+    // 判断iter_end
     ret = OB_ITER_END;
     LOG_DEBUG("get next row with das iter end", K(ret), K_(limit_param), K_(output_row_cnt));
   }
   while (OB_SUCC(ret) && !got_row) {
     clear_evaluated_flag();
     if (OB_FAIL(scan_result_.get_next_row())) {
+      // 调用DASOpResultIter的get_next_row
       if (OB_ITER_END == ret) {
+        // 到达当前das task的end，就fetch下一个task
         if (OB_FAIL(scan_result_.next_result())) {
           if (OB_ITER_END != ret) {
             LOG_WARN("fetch next task failed", K(ret));
@@ -1703,6 +1722,8 @@ int ObTableScanOp::get_next_row_with_das()
     } else {
       // We need do filter first before do the limit.
       // See the issue 47201028.
+      // get之后先做filter，filtered=true表示该行被过滤
+      // 这里指的应该是未下压的过滤
       bool filtered = false;
       if (need_final_limit_ && !MY_SPEC.filters_.empty()) {
         if (OB_FAIL(filter_row(filtered))) {
@@ -1717,6 +1738,8 @@ int ObTableScanOp::get_next_row_with_das()
       } else {
         ++input_row_cnt_;
       }
+      // TODO: 不明白这里的limit_param_.offset_
+      // 为什么要搞一个input和一个output
       if (need_final_limit_ && input_row_cnt_ <= limit_param_.offset_) {
         continue;
       } else {
@@ -2080,14 +2103,18 @@ OB_INLINE int ObTableScanOp::do_table_scan()
     //execute with das
     LOG_DEBUG("do table scan with DAS", K(MY_SPEC.ref_table_id_), K(MY_SPEC.table_loc_id_));
     if (OB_FAIL(prepare_pushdown_limit_param())) {
+      // 次要：用意不明
       LOG_WARN("prepare pushdow limit param failed", K(ret));
     } else if (OB_FAIL(das_ref_.execute_all_task())) {
+      // 主要：执行之前创建的das tasks
       LOG_WARN("execute all das scan task failed", K(ret));
     }
     if (OB_SUCC(ret)) {
+      // 次要：给输出行做一些准备
       //prepare to output row
       scan_result_ = das_ref_.begin_result_iter();
       if (OB_FAIL(update_output_tablet_id())) {
+        // 设置输出行的tablet_id？
         LOG_WARN("update output row pkey failed", K(ret), K(scan_result_.get_tablet_loc()->tablet_id_));
       }
     }

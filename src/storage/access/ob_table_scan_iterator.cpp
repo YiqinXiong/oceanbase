@@ -208,22 +208,27 @@ int ObTableScanIterator::init(ObTableScanParam &scan_param, const ObTabletHandle
   int ret = OB_SUCCESS;
   ObStoreCtx &store_ctx = ctx_guard_.get_store_ctx();
   if (OB_UNLIKELY(is_inited_)) {
+    // 防止初始化两次
     ret = OB_INIT_TWICE;
     STORAGE_LOG(WARN, "The ObTableScanIterator has been inited, ", K(ret), K(*this));
   } else if (OB_UNLIKELY(!store_ctx.is_valid())
           || OB_UNLIKELY(!scan_param.is_valid())
           || OB_UNLIKELY(!tablet_handle.is_valid())) {
+    // 防止出现store_ctx/scan_param/tablet_handle为空的情况
     ret = OB_INVALID_ARGUMENT;
     STORAGE_LOG(WARN, "Invalid argument to init table scan iter", K(ret), K(store_ctx), K(scan_param),
         K(tablet_handle));
   } else if (OB_FAIL(table_scan_range_.init(scan_param))) {
+    // 初始化key_range
     STORAGE_LOG(WARN, "Failed to init table scan range", K(ret), K(scan_param));
   } else {
     scan_param_ = &scan_param;
     get_table_param_.tablet_iter_.tablet_handle_ = tablet_handle;
     if (OB_FAIL(prepare_table_param(tablet_handle))) {
+      // 构建table_param/iter_param(pushdown filter)
       STORAGE_LOG(WARN, "Fail to prepare table param, ", K(ret));
     } else if (OB_FAIL(prepare_table_context())) {
+      // 构建store_ctx
       STORAGE_LOG(WARN, "Fail to prepare table ctx, ", K(ret));
     } else if (OB_FAIL(open_iter())) {
       STORAGE_LOG(WARN, "fail to open iter", K(ret), K(*this));
@@ -371,7 +376,9 @@ int ObTableScanIterator::open_iter()
       }
     } else {
       if (table_scan_range_.get_ranges().count() == 1) {
+        // 单个range
         if (scan_param_->sample_info_.is_block_sample()) {
+          // block_sample 是什么？按块采样？
           if (nullptr == scan_merge_ && OB_FAIL(init_scan_iter(scan_merge_))) {
             STORAGE_LOG(WARN, "Failed to init scanmerge", K(ret));
           } else if (OB_FAIL(get_table_param_.tablet_iter_.tablet_handle_.get_obj()->get_read_tables(
@@ -404,20 +411,26 @@ int ObTableScanIterator::open_iter()
             }
           }
         } else if (scan_param_->use_index_skip_scan()) {
+          // 单个range + 使用index_skip
           INIT_AND_OPEN_SKIP_SCAN_ITER(skip_scan_merge_, table_scan_range_.get_ranges().at(0), table_scan_range_.get_suffix_ranges().at(0), false);
         } else {
+          // 单个range
+          // 包含init_scan_iter和open
           INIT_AND_OPEN_ITER(scan_merge_, table_scan_range_.get_ranges().at(0), false);
         }
       } else if (scan_param_->use_index_skip_scan()) {
+        // 多个range，即multiple multi scan range。index_skip 不支持
         ret = OB_NOT_SUPPORTED;
         STORAGE_LOG(WARN, "multiple ranges are not supported in index skip scan now");
       } else {
+        // multiple multi scan range
         INIT_AND_OPEN_ITER(multi_scan_merge_, table_scan_range_.get_ranges(), false);
       }
     }
 
     if (OB_SUCC(ret)) {
       if (scan_param_->sample_info_.is_row_sample() || retire_to_row_sample) {
+        // row_sample 是什么？按行采样？
         if (!retire_to_row_sample) {
         } else if (OB_ISNULL(scan_merge_)) {
           ret = OB_ERR_UNEXPECTED;

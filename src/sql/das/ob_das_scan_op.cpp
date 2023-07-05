@@ -203,6 +203,7 @@ int ObDASScanOp::swizzling_remote_task(ObDASRemoteInfo *remote_info)
 
 int ObDASScanOp::init_scan_param()
 {
+  // 怎么好像没有看到key_ranges的赋值。但日志里打印的内容有key_ranges
   int ret = OB_SUCCESS;
   scan_param_.tenant_id_ = MTL_ID();
   scan_param_.tx_lock_timeout_ = scan_rtdef_->tx_lock_timeout_;
@@ -268,17 +269,22 @@ ObITabletScan &ObDASScanOp::get_tsc_service()
 int ObDASScanOp::open_op()
 {
   int ret = OB_SUCCESS;
+  // 如果不是virtual_table，那么tsc_service实际为storage::ObAccessService
+  // storage::ObAccessService 继承 common::ObITabletScan 接口
   ObITabletScan &tsc_service = get_tsc_service();
   reset_access_datums_ptr();
   if (OB_FAIL(init_scan_param())) {
+    // 1. 初始化scan_param
     LOG_WARN("init scan param failed", K(ret));
   } else if (OB_FAIL(tsc_service.table_scan(scan_param_, result_))) {
+    // 2. 执行table_scan
     if (OB_SNAPSHOT_DISCARDED == ret && scan_param_.fb_snapshot_.is_valid()) {
       ret = OB_INVALID_QUERY_TIMESTAMP;
     } else if (OB_TRY_LOCK_ROW_CONFLICT != ret) {
       LOG_WARN("fail to scan table", K(scan_param_), K(ret));
     }
   } else if (get_lookup_ctdef() != nullptr) {
+    // 3. 如果有lookup ctdef，则要做local index lookup
     if (OB_FAIL(do_local_index_lookup())) {
       LOG_WARN("do local index lookup failed", K(ret));
     }

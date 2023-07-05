@@ -512,12 +512,16 @@ int ObMacroBlockWriter::append_row(const ObDatumRow &row, const ObMacroBlockDesc
   return ret;
 }
 
+// 该函数主要逻辑为：
+//   1. 将行数据写入到微块中，并更新 bloomfilter 和 checksum
+//   2. 在当前微块写满的情况下：构建当前的微块，并切换微块写入器
 int ObMacroBlockWriter::append_row(const ObDatumRow &row, const int64_t split_size)
 {
   int ret = OB_SUCCESS;
   const ObDatumRow *row_to_append = &row;
   bool is_need_set_micro_upper_bound = false;
   int64_t estimate_remain_size = 0;
+  // 参数检查的相关代码
   if (NULL == data_store_desc_) {
     ret = OB_NOT_INIT;
     STORAGE_LOG(WARN, "The ObMacroBlockWriter has not been opened, ", K(ret));
@@ -528,21 +532,28 @@ int ObMacroBlockWriter::append_row(const ObDatumRow &row, const int64_t split_si
     STORAGE_LOG(WARN, "macro block writer fail to check order.", K(row));
   }
   if (OB_SUCC(ret)) {
+    // 向当前的微块中写入一行数据
     is_macro_or_micro_block_reused_ = false;
     const ObStorageDatumUtils &datum_utils = read_info_.get_datum_utils();
     if (OB_FAIL(append_row_and_hash_index(*row_to_append))) {
+      // 初次尝试写入失败
       if (OB_BUF_NOT_ENOUGH == ret) {
         if (0 == micro_writer_->get_row_count()) {
+          // 不支持超过 16KB 的行
           ret = OB_NOT_SUPPORTED;
           STORAGE_LOG(ERROR, "The single row is too large, ", K(ret), K(row));
         } else if (OB_FAIL(build_micro_block())) {
+          // 当前微块写满后，需要构建该微块：编码、压缩等
           STORAGE_LOG(WARN, "Fail to build micro block, ", K(ret));
         } else if (OB_FAIL(OB_FAIL(append_row_and_hash_index(*row_to_append)))) {
+          // 继续写当前行数据
           STORAGE_LOG(ERROR, "Fail to append row to micro block, ", K(ret), K(row));
         } else if (OB_FAIL(save_last_key(*row_to_append))) {
+          // 更新宏块的endkey
           STORAGE_LOG(WARN, "Fail to save last key, ", K(ret), K(row));
         }
         if (OB_SUCC(ret) && data_store_desc_->need_prebuild_bloomfilter_) {
+          // 更新bloomfilter
           ObDatumRowkey rowkey;
           uint64_t hash = 0;
           if (OB_FAIL(rowkey.assign(row_to_append->storage_datums_, data_store_desc_->bloomfilter_rowkey_prefix_))) {
@@ -561,6 +572,7 @@ int ObMacroBlockWriter::append_row(const ObDatumRow &row, const int64_t split_si
     } else {
       bool is_split = false;
       if (data_store_desc_->need_prebuild_bloomfilter_) {
+        // 更新bloomfilter
         ObDatumRowkey rowkey;
         uint64_t hash = 0;
         if (OB_FAIL(rowkey.assign(row_to_append->storage_datums_, data_store_desc_->bloomfilter_rowkey_prefix_))) {
@@ -575,11 +587,14 @@ int ObMacroBlockWriter::append_row(const ObDatumRow &row, const int64_t split_si
       }
       if (OB_FAIL(ret)) {
       } else if (OB_FAIL(save_last_key(*row_to_append))) {
+        // 更新宏块的endkey
         STORAGE_LOG(WARN, "Fail to save last key, ", K(ret), K(row));
       } else if (OB_FAIL(micro_block_adaptive_splitter_.check_need_split(micro_writer_->get_block_size(), micro_writer_->get_row_count(),
             split_size, macro_blocks_[current_index_].get_data_size(), is_keep_freespace(), is_split))) {
+        // 检查是否需要构建新的微块，检查条件：当前微块已经满 16KB
         STORAGE_LOG(WARN, "Failed to check need split", K(ret), KPC(micro_writer_));
       } else if (is_split && OB_FAIL(build_micro_block())) {
+        // 如果需要，就构建新的微块
         STORAGE_LOG(WARN, "Fail to build micro block, ", K(ret));
       }
     }

@@ -85,12 +85,14 @@ int ObDataAccessService::execute_das_task(
     ObDASRef &das_ref, ObDasAggregatedTasks &task_ops, bool async) {
   int ret = OB_SUCCESS;
   if (OB_LIKELY(das_ref.is_execute_directly())) {
+    // 普通das直接执行
     common::ObSEArray<ObIDASTaskOp *, 2> task_wrapper;
     FLTSpanGuard(do_local_das_task);
     while (OB_SUCC(ret) && OB_SUCC(task_ops.get_aggregated_tasks(task_wrapper)) &&
         task_wrapper.count() != 0) {
       for (int i = 0; OB_SUCC(ret) && i < task_wrapper.count(); i++) {
         if (OB_FAIL(task_wrapper.at(i)->start_das_task())) {
+          // 主要
           int tmp_ret = OB_SUCCESS;
           LOG_WARN("start das task failed", K(ret), K(*task_wrapper.at(i)));
           if (OB_TMP_FAIL(task_wrapper.at(i)->state_advance())) {
@@ -105,6 +107,7 @@ int ObDataAccessService::execute_das_task(
       task_wrapper.reuse();
     }
   } else if (OB_FAIL(execute_dist_das_task(das_ref, task_ops, async))) {
+    // 处理分布式das
     LOG_WARN("failed to execute dist das task", K(ret));
   }
   return ret;

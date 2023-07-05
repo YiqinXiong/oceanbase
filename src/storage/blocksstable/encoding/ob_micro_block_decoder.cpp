@@ -1824,6 +1824,7 @@ int ObMicroBlockDecoder::get_multi_version_info(
   return OB_NOT_SUPPORTED;
 }
 
+// 黑盒filter下压
 int ObMicroBlockDecoder::filter_pushdown_filter(
     const sql::ObPushdownFilterExecutor *parent,
     sql::ObBlackFilterExecutor &filter,
@@ -1882,6 +1883,7 @@ int ObMicroBlockDecoder::filter_pushdown_filter(
   return ret;
 }
 
+// 白盒filter下压
 int ObMicroBlockDecoder::filter_pushdown_filter(
     const sql::ObPushdownFilterExecutor *parent,
     sql::ObWhiteFilterExecutor &filter,
@@ -1913,10 +1915,12 @@ int ObMicroBlockDecoder::filter_pushdown_filter(
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null col buf", K(ret), K(col_buf), K(col_capacity));
   } else if (FALSE_IT(col_offset = col_offsets.at(0))) {
+    // 获取col_offset
   } else if (OB_UNLIKELY(0 > col_offset || header_->column_count_ <= col_offset)) {
     ret = OB_INDEX_OUT_OF_RANGE;
     LOG_WARN("Filter column offset out of range", K(ret), K(header_->column_count_), K(col_offset));
   } else if (OB_ISNULL(column_decoder = decoders_ + col_offset)) {
+    // 通过offset获取column_decoder
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Null pointer of column decoder", K(ret));
   } else {
@@ -1926,6 +1930,9 @@ int ObMicroBlockDecoder::filter_pushdown_filter(
         op_type != sql::WHITE_OP_NU &&
         op_type != sql::WHITE_OP_NN &&
         op_type != sql::WHITE_OP_IN) {
+      // 检查filter的param_contained
+      // 如果filter没有param，而且op类型不是“null”、“not null”和“in”，则报错
+      // TODO: 为什么op_type=in的时候，filter没有param？
     } else if (OB_FAIL(column_decoder->decoder_->pushdown_operator(
                 parent,
                 *column_decoder->ctx_,
@@ -1933,6 +1940,9 @@ int ObMicroBlockDecoder::filter_pushdown_filter(
                 meta_data_,
                 row_index_,
                 result_bitmap))) {
+      // 执行pushdown operator
+      
+      // 如果不支持，则执行退行的pushdown
       if (OB_LIKELY(ret == OB_NOT_SUPPORTED)) {
         LOG_TRACE("[PUSHDOWN] Column specific operator failed, switch to retrograde filter pushdown",
                   K(ret), K(filter));

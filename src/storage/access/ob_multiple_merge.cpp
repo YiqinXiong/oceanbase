@@ -135,10 +135,12 @@ int ObMultipleMerge::init(
     access_param_ = &param;
     access_ctx_ = &context;
     row_stat_.reset();
+    // 当前行的列数=输出行所需列数
     cur_row_.count_ = access_param_->iter_param_.out_cols_project_->count();
     scan_state_ = ScanState::NONE;
     read_memtable_only_ = false;
     for (int64_t i = cur_row_.get_column_count(); i < param.get_out_col_cnt(); ++i) {
+      // 初始置空
       cur_row_.storage_datums_[i].set_nop();
     }
     unprojected_row_.count_ = 0;
@@ -149,6 +151,7 @@ int ObMultipleMerge::init(
         ret = OB_ERR_UNEXPECTED;
         STORAGE_LOG(WARN, "Unexpected null read_info", K(ret));
       } else {
+        // 迭代设置out_project_cols_
         for (int64_t i = 0; OB_SUCC(ret) && i < param.iter_param_.out_cols_project_->count(); i++) {
           if (OB_FAIL(out_project_cols_.push_back(read_info->get_columns_desc().at(param.iter_param_.out_cols_project_->at(i))))) {
             STORAGE_LOG(WARN, "Failed to push back col desc", K(ret));
@@ -160,8 +163,10 @@ int ObMultipleMerge::init(
     }
     if (OB_FAIL(ret)) {
     } else if (OB_FAIL(prepare_read_tables())) {
+      // 给迭代器准备tables
       STORAGE_LOG(WARN, "fail to prepare read tables", K(ret));
     } else if (OB_FAIL(alloc_row_store(context, param))) {
+      // 给row分配内存
       LOG_WARN("fail to alloc row store", K(ret));
     } else if (param.iter_param_.is_use_iter_pool() && OB_FAIL(alloc_iter_pool(*context.stmt_allocator_))) {
       LOG_WARN("Failed to init iter pool", K(ret));
@@ -451,8 +456,10 @@ int ObMultipleMerge::get_next_normal_rows(int64_t &count, int64_t capacity)
       padding_allocator_.reuse();
     }
     reuse_lob_locator();
+    // 迭代吐出row
     while (OB_SUCC(ret) && !vector_store->is_end()) {
       bool can_batch = false;
+      // 如果can_batch（单个consumer+下压filter？）就做batch scan
       if (access_ctx_->is_limit_end()) {
         ret = OB_ITER_END;
       } else if (OB_FAIL(can_batch_scan(can_batch))) {
@@ -474,6 +481,7 @@ int ObMultipleMerge::get_next_normal_rows(int64_t &count, int64_t capacity)
         // 1. batch full; 2. end of micro block with row returned;
         // 3. pushdown changed with row returned; 4. limit/offset end
       } else {
+        // 非batch scan，一行一行的get
         if (OB_FAIL(inner_get_next_row(unprojected_row_))) {
           if (OB_PUSHDOWN_STATUS_CHANGED == ret) {
             ret = OB_SUCCESS;
@@ -828,6 +836,7 @@ int ObMultipleMerge::open()
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null access info", K(ret), KP(access_param_), KP(access_ctx_));
   } else if (OB_FAIL(cur_row_.reserve(access_param_->get_max_out_col_cnt()))) {
+    // 给row留空间备用
     STORAGE_LOG(WARN, "Failed to init datum row", K(ret));
   } else if (OB_FAIL(nop_pos_.init(*access_ctx_->stmt_allocator_, access_param_->get_max_out_col_cnt()))) {
     STORAGE_LOG(WARN, "Fail to init nop pos, ", K(ret));
@@ -843,6 +852,7 @@ int ObMultipleMerge::open()
       access_ctx_->block_row_store_ = block_row_store_;
       ObMultipleMerge::reuse();
       if (nullptr != block_row_store_ && OB_FAIL(block_row_store_->open())) {
+        // TODO: 打开block_row_store，这里有何用意？
         LOG_WARN("fail to open block_row_store", K(ret));
       } else if (nullptr != iter_pool_ && 0 != iters_.count()) {
         ret = OB_ERR_UNEXPECTED;
@@ -1109,6 +1119,7 @@ int ObMultipleMerge::prepare_read_tables(bool refresh)
     ret = OB_ERR_SYS;
     LOG_WARN("base version should be 0", K(ret), K(access_ctx_->trans_version_range_.base_version_));
   } else if (!refresh && get_table_param_.tablet_iter_.table_iter_.is_valid()) {
+    // 已有迭代器 ObTableStoreIterator，直接从迭代器准备table
     if (OB_FAIL(prepare_tables_from_iterator(get_table_param_.tablet_iter_.table_iter_))) {
       LOG_WARN("prepare tables fail", K(ret), K(get_table_param_.tablet_iter_.table_iter_));
     }
@@ -1119,6 +1130,7 @@ int ObMultipleMerge::prepare_read_tables(bool refresh)
       ret = OB_INVALID_ARGUMENT;
       LOG_WARN("invalid tablet handle", K(ret), K_(get_table_param), KP_(access_param));
     } else if (OB_UNLIKELY(get_table_param_.frozen_version_ != -1)) {
+      // 只需要读major sst
       if (!get_table_param_.sample_info_.is_no_sample()) {
         ret = OB_NOT_SUPPORTED;
         LOG_WARN("sample query does not support frozen_version", K(ret), K_(get_table_param), KP_(access_param));
@@ -1126,6 +1138,7 @@ int ObMultipleMerge::prepare_read_tables(bool refresh)
         LOG_WARN("get table iterator fail", K(ret), K_(get_table_param), KP_(access_param));
       }
     } else if (OB_FAIL(tablet_handle.get_obj()->get_read_tables(
+      // 读major+minor+memtable
         get_table_param_.sample_info_.is_no_sample()
           ? access_ctx_->store_ctx_->mvcc_acc_ctx_.get_snapshot_version().get_val_for_tx()
           : INT64_MAX,
@@ -1136,6 +1149,7 @@ int ObMultipleMerge::prepare_read_tables(bool refresh)
 
     if (OB_SUCC(ret)) {
       if (OB_FAIL(prepare_tables_from_iterator(get_table_param_.tablet_iter_.table_iter_, &get_table_param_.sample_info_))) {
+        // 上面把table加到iterator中，这里把iterator中的table加到tables_中
         LOG_WARN("failed to prepare tables from iter", K(ret), K(get_table_param_.tablet_iter_.table_iter_));
       }
     }

@@ -127,6 +127,7 @@ int ObSSTable::scan(
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Invalid argument", K(ret), K(param), K(context), K(key_range));
   } else {
+    // 给row scanner分配内存、init
     ObStoreRowIterator *row_scanner = nullptr;
     if (context.query_flag_.is_whole_macro_scan()) {
       ALLOCATE_TABLE_STORE_ROW_IETRATOR(context,
@@ -137,11 +138,13 @@ int ObSSTable::scan(
           ObSSTableMultiVersionRowScanner,
           row_scanner);
     } else {
+      // 简单 select * 走了这条路？
       ALLOCATE_TABLE_STORE_ROW_IETRATOR(context,
           ObSSTableRowScanner<>,
           row_scanner);
     }
 
+    // 初始化迭代器
     if (OB_SUCC(ret)) {
       if (OB_ISNULL(row_scanner)) {
         ret = OB_ERR_UNEXPECTED;

@@ -247,12 +247,14 @@ int ObIMicroBlockRowScanner::inner_get_next_row(const ObDatumRow *&row)
       LOG_WARN("fail to judge end of block or not", K(ret));
     }
   } else if (OB_UNLIKELY(nullptr != block_row_store_ && block_row_store_->can_blockscan())) {
+    // 下推路径
     if (OB_FAIL(inner_get_next_row_blockscan(row))) {
       if (OB_UNLIKELY(OB_ITER_END != ret)) {
         LOG_WARN("[PUSHDOWN] failed to get next row pushdown", K(ret), K_(macro_id));
       }
     }
   } else {
+    // 普通路径
     if (OB_FAIL(reader_->get_row(current_, row_))) {
       LOG_WARN("micro block reader fail to get row.", K(ret), K_(macro_id));
     } else {
@@ -477,6 +479,7 @@ int ObIMicroBlockRowScanner::filter_pushdown_filter(
     common::ObBitmap &bitmap)
 {
   int ret = OB_SUCCESS;
+  // 确定scan方向
   if (!reverse_scan_) {
     pd_filter_info.start_ = current_;
     pd_filter_info.end_ = last_ + 1;
@@ -489,8 +492,10 @@ int ObIMicroBlockRowScanner::filter_pushdown_filter(
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Invalid argument", K(ret), KP(reader_), KP_(block_row_store), KPC(filter));
   } else if (ObIMicroBlockReader::Decoder == reader_->get_type()) {
+    // reader_的类型是Decoder
     blocksstable::ObMicroBlockDecoder *decoder = static_cast<blocksstable::ObMicroBlockDecoder *>(reader_);
     if (filter->is_filter_black_node()) {
+      // 黑盒filter，进一步分为向量化batch和普通decoder
       sql::ObBlackFilterExecutor *black_filter = static_cast<sql::ObBlackFilterExecutor *>(filter);
       if (param_->vectorized_enabled_ && black_filter->can_vectorized() && block_row_store_->is_empty()) {
         if (OB_FAIL(block_row_store_->filter_micro_block_batch(
@@ -508,15 +513,17 @@ int ObIMicroBlockRowScanner::filter_pushdown_filter(
         LOG_WARN("Failed to execute black pushdown filter", K(ret));
       }
     } else {
+      // 白盒filter
       if (OB_FAIL(decoder->filter_pushdown_filter(
                   parent,
                   *static_cast<sql::ObWhiteFilterExecutor *>(filter),
                   pd_filter_info,
                   bitmap))) {
-        LOG_WARN("Failed to execute black pushdown filter", K(ret));
+        LOG_WARN("Failed to execute white pushdown filter", K(ret));
       }
     }
   } else {
+    // reader_的类型是Reader
     blocksstable::ObMicroBlockReader *flat_reader = static_cast<blocksstable::ObMicroBlockReader *>(reader_);
     if (OB_FAIL(flat_reader->filter_pushdown_filter(
                 parent,

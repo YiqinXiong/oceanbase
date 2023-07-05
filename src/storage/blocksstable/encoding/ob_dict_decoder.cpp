@@ -935,12 +935,13 @@ int ObDictDecoder::bt_operator(
       ObDictDecoderIterator end_it = end(&col_ctx, col_ctx.col_header_->length_);
       const ObIArray<ObObj> &objs = filter.get_objs();
       if (meta_header_->is_sorted_dict()) {
+        // 有序字典，二分查找字典确定REF的上下界
         ObDictDecoderIterator loc;
         loc = std::lower_bound(begin_it, end_it, objs.at(0));
         int64_t left_bound_inclusive_ref = loc - begin_it;
         loc = std::upper_bound(begin_it, end_it, objs.at(1));
         int64_t right_bound_exclusive_ref = loc - begin_it;
-
+        // 遍历REF表，ref介于上下界之间的row，使用对应的row_id置bitmap对应位为1
         int64_t ref = 0;
         for (int64_t row_id = 0;
              OB_SUCC(ret) && row_id < col_ctx.micro_block_header_->row_count_;
@@ -958,6 +959,7 @@ int ObDictDecoder::bt_operator(
           }
         }
       } else {
+        // 无序字典，遍历字典构造ref_bitset：符合between条件的ref对应的bit位置为1
         bool found = false;
         ObDictDecoderIterator traverse_it = begin(&col_ctx, col_ctx.col_header_->length_);
         const int64_t ref_bitset_size = meta_header_->count_ + 1;
@@ -973,6 +975,7 @@ int ObDictDecoder::bt_operator(
           ++traverse_it;
           ++dict_ref;
         }
+        // 根据ref_bitset设置bitmap
         if (found && OB_FAIL(set_res_with_bitset(parent, col_ctx, col_data, ref_bitset, result_bitmap))) {
           LOG_WARN("Failed to set result bitmap", K(ret));
         }
@@ -1002,10 +1005,12 @@ int ObDictDecoder::in_operator(
       bool found = false;
       ObDictDecoderIterator traverse_it = begin(&col_ctx, col_ctx.col_header_->length_);
       ObDictDecoderIterator end_it = end(&col_ctx, col_ctx.col_header_->length_);
+      // 初始化ref_bitset
       const int64_t ref_bitset_size = meta_header_->count_ + 1;
       char ref_bitset_buf[sql::ObBitVector::memory_size(ref_bitset_size)];
       sql::ObBitVector *ref_bitset = sql::to_bit_vector(ref_bitset_buf);
       ref_bitset->init(ref_bitset_size);
+      // 遍历字典，如果满足in条件，对应ref在ref_bitset中的位设为1
       int64_t dict_ref = 0;
       bool is_exist = false;
       while (OB_SUCC(ret) && traverse_it != end_it) {
@@ -1018,6 +1023,7 @@ int ObDictDecoder::in_operator(
         ++traverse_it;
         ++dict_ref;
       }
+      // 根据ref_bitset设置bitmap
       if (found && OB_FAIL(set_res_with_bitset(parent, col_ctx, col_data, ref_bitset, result_bitmap))) {
         LOG_WARN("Failed to set result bitmap", K(ret));
       }

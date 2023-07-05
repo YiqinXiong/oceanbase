@@ -327,6 +327,8 @@ ObIDASTaskOp *ObDASTaskArg::get_task_op()
   return task_ops_.at(0);
 }
 
+// 根据任务状态，把结束/失败的任务移动到相应list
+// 非线程安全
 int ObIDASTaskOp::state_advance()
 {
   int ret = OB_SUCCESS;

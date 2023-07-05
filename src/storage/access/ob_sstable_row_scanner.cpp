@@ -73,6 +73,7 @@ int ObSSTableRowScanner<PrefetchType>::inner_open(
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Invalid argument to init ObSSTableRowScanner", K(ret), KP(query_range), KP(table));
   } else {
+    // 获取prefetcher相关的上下文信息
     const ObTableReadInfo *index_read_info = iter_param.get_full_read_info()->get_index_read_info();
     sstable_ = static_cast<ObSSTable *>(table);
     iter_param_ = &iter_param;
@@ -80,12 +81,14 @@ int ObSSTableRowScanner<PrefetchType>::inner_open(
     if (!prefetcher_.is_valid()) {
       if (OB_FAIL(prefetcher_.init(
                   type_, *sstable_, iter_param, access_ctx, query_range))) {
+        // prefetcher的init
         LOG_WARN("fail to init prefetcher, ", K(ret));
       }
     } else if (OB_ISNULL(index_read_info)) {
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("Unexpected null index read info", K(ret), KP(index_read_info));
     } else if (OB_FAIL(prefetcher_.switch_context(type_, *index_read_info, *sstable_, access_ctx, query_range))) {
+      // 切换上下文
       LOG_WARN("fail to switch context for prefetcher, ", K(ret));
     }
     if (OB_SUCC(ret)) {
@@ -93,6 +96,7 @@ int ObSSTableRowScanner<PrefetchType>::inner_open(
         prefetcher_.agg_row_store_ = reinterpret_cast<ObAggregatedStore *>(block_row_store_);
       }
       if (OB_FAIL(prefetcher_.prefetch())) {
+        // 主要：做prefetch
         LOG_WARN("ObSSTableRowScanner prefetch failed", K(ret));
       } else {
         is_opened_ = true;
@@ -145,6 +149,7 @@ int ObSSTableRowScanner<PrefetchType>::open_cur_data_block(ObSSTableReadHandle &
   } else {
     blocksstable::ObMicroIndexInfo &micro_info = prefetcher_.current_micro_info();
     ObMicroBlockDataHandle &micro_handle = prefetcher_.current_micro_handle();
+    // 初始化micro scannner
     if (nullptr == micro_scanner_) {
       if (OB_FAIL(init_micro_scanner())) {
         LOG_WARN("fail to init micro scanner", K(ret));
@@ -156,6 +161,7 @@ int ObSSTableRowScanner<PrefetchType>::open_cur_data_block(ObSSTableReadHandle &
     }
 
     if (OB_SUCC(ret)) {
+      // scannner 的 reuse + 设置scan range
       // init scanner
       if (prefetcher_.cur_micro_data_fetch_idx_ == read_handle.micro_begin_idx_ &&
           cur_range_idx_ != read_handle.range_idx_) {
@@ -180,11 +186,13 @@ int ObSSTableRowScanner<PrefetchType>::open_cur_data_block(ObSSTableReadHandle &
                   block_data,
                   micro_info.is_left_border(),
                   micro_info.is_right_border()))) {
+        // block data 绑定到 micro_scannner_，locate range
         LOG_WARN("Fail to open micro_scanner", K(ret), K(micro_info), K(micro_handle), KPC(this));
       } else if (OB_FAIL(prefetcher_.check_blockscan(can_blockscan))) {
         LOG_WARN("Fail to check_blockscan", K(ret));
       } else if (can_blockscan && nullptr != block_row_store_ && !block_row_store_->is_disabled()) {
         // Apply pushdown filter and block scan
+        // 计算filter下推
         if (OB_FAIL(micro_scanner_->apply_blockscan(block_row_store_, access_ctx_->table_store_stat_))) {
           if (OB_UNLIKELY(OB_ITER_END != ret)) {
             LOG_WARN("Fail to apply_block_scan", K(ret), KPC(block_row_store_));
@@ -196,6 +204,7 @@ int ObSSTableRowScanner<PrefetchType>::open_cur_data_block(ObSSTableReadHandle &
         LOG_TRACE("[PUSHDOWN] pushdown for block scan", K(prefetcher_.cur_micro_data_fetch_idx_), K(micro_info), KPC(block_row_store_));
       }
       if (OB_SUCC(ret)) {
+        // ++微块引用计数
         ++access_ctx_->table_store_stat_.micro_access_cnt_;
         LOG_DEBUG("Success to open micro block", K(ret), K(read_handle), K(prefetcher_.cur_micro_data_fetch_idx_),
                   K(micro_info), K(micro_handle), KPC(this), K(common::lbt()));
@@ -279,6 +288,7 @@ int ObSSTableRowScanner<PrefetchType>::fetch_row(ObSSTableReadHandle &read_handl
     }
     if (need_open_micro) {
       if (OB_FAIL(open_cur_data_block(read_handle))) {
+        // 打开当前data block
         if (OB_UNLIKELY(OB_ITER_END != ret)) {
           LOG_WARN("Fail to open cur data block", K(ret), KPC(this));
         }
@@ -290,7 +300,9 @@ int ObSSTableRowScanner<PrefetchType>::fetch_row(ObSSTableReadHandle &read_handl
     }
 
     while (OB_SUCC(ret)) {
+      // 内部调用ObIMicroBlockRowScanner::inner_get_next_row
       if (OB_FAIL(micro_scanner_->get_next_row(store_row))) {
+        // get next row失败，报错或重试
         if (OB_UNLIKELY(OB_ITER_END != ret)) {
           LOG_WARN("Fail to get next row", K(ret));
         } else if (prefetcher_.cur_micro_data_fetch_idx_ >= read_handle.micro_end_idx_) {
@@ -299,6 +311,7 @@ int ObSSTableRowScanner<PrefetchType>::fetch_row(ObSSTableReadHandle &read_handl
                     K(prefetcher_.cur_micro_data_fetch_idx_), K(read_handle));
         } else if (FALSE_IT(++prefetcher_.cur_micro_data_fetch_idx_)) {
         } else if (OB_FAIL(open_cur_data_block(read_handle))) {
+          // 重试：再次打开cur_data_block
           if (OB_UNLIKELY(OB_ITER_END != ret)) {
             LOG_WARN("Fail to open cur data block", K(ret), KPC(this));
           }
@@ -308,6 +321,7 @@ int ObSSTableRowScanner<PrefetchType>::fetch_row(ObSSTableReadHandle &read_handl
                     K(prefetcher_.cur_micro_data_fetch_idx_));
         }
       } else {
+        // get next row成功，更新scan_index
         (const_cast<ObDatumRow*> (store_row))->scan_index_ = read_handle.range_idx_;
         break;
       }

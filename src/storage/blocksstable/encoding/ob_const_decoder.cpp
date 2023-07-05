@@ -597,7 +597,8 @@ int ObConstDecoder::bt_operator(
     const ObIntArrayFuncTable &row_ids = ObIntArrayFuncTable::instance(meta_header_->row_id_byte_);
     const int64_t dict_meta_length = col_ctx.col_header_->length_ - meta_header_->offset_;
     bool const_in_result_set = false;
-
+    
+    // 先获取常量值，与between条件比较
     if (meta_header_->const_ref_ == dict_count) {
     } else {
       ObDictDecoderIterator dict_iter = dict_decoder_.begin(&col_ctx, dict_meta_length);
@@ -611,6 +612,7 @@ int ObConstDecoder::bt_operator(
       if (OB_FAIL(ret)) {
       } else if (const_obj >= objs.at(0) && const_obj <= objs.at(1)) {
         if (OB_FAIL(result_bitmap.bit_not())) {
+          // 取反，即全置为1
           LOG_WARN("Failed to flip all bits in result bitmap", K(ret));
         } else {
           const_in_result_set = true;
@@ -626,6 +628,7 @@ int ObConstDecoder::bt_operator(
       char ref_bitset_buf[sql::ObBitVector::memory_size(ref_bitset_size)];
       sql::ObBitVector *ref_bitset = sql::to_bit_vector(ref_bitset_buf);
       ref_bitset->init(ref_bitset_size);
+      // 字典中的索引序号
       int64_t dict_ref = 0;
       while (OB_SUCC(ret) && trav_it != end_it) {
         if (OB_UNLIKELY(((*trav_it).is_null_oracle() && lib::is_oracle_mode())
@@ -633,6 +636,7 @@ int ObConstDecoder::bt_operator(
           ret = OB_ERR_UNEXPECTED;
           LOG_WARN("There should not be null object in dictionary", K(ret));
         } else if (!const_in_result_set == (*trav_it >= objs.at(0) && *trav_it <= objs.at(1))) {
+          // 特殊值在范围内，对应bit置为1
           found = true;
           ref_bitset->set(dict_ref);
         }
@@ -669,15 +673,21 @@ int ObConstDecoder::in_operator(
     LOG_WARN("Invalid argument for IN operator",
              K(ret), K(result_bitmap.size()), K(filter));
   } else {
+    // 初始化bitmap
+    // exception表长度
     int64_t dict_count = dict_decoder_.get_dict_header()->count_;
     const ObIntArrayFuncTable &row_ids = ObIntArrayFuncTable::instance(meta_header_->row_id_byte_);
     const int64_t dict_meta_length = col_ctx.col_header_->length_ - meta_header_->offset_;
+    // TRUE: const值在 in () 数组里
     bool const_in_result_set = false;
 
     if (meta_header_->const_ref_ == dict_count) {
+      // TODO: 说明什么？
     } else {
+      // 定位到const值
       ObDictDecoderIterator dict_iter = dict_decoder_.begin(&col_ctx, dict_meta_length);
       ObObj& const_obj = *(dict_iter + meta_header_->const_ref_);
+      // CHAR 类型的比较需要padding
       if (const_obj.is_fixed_len_char_type() && nullptr != col_ctx.col_param_) {
         if (OB_FAIL(storage::pad_column(col_ctx.col_param_->get_accuracy(),
                                         *col_ctx.allocator_, const_obj))) {

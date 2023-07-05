@@ -245,9 +245,11 @@ int ObAccessService::table_scan(
     LOG_ERROR("The result_ is already pointed to an valid object",
         K(ret), K(vparam), KPC(result), K(lbt()));
   } else if (OB_ISNULL(iter = common::sop_borrow(ObTableScanIterator))) {
+    // 给iter分配内存
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("alloc table scan iterator fail", K(ret));
   } else if (FALSE_IT(result = iter)) {
+    // 把iter赋值给result
     // upper layer responsible for releasing iter object
   } else if (OB_FAIL(check_read_allowed_(ls_id,
                                          data_tablet_id,
@@ -264,6 +266,7 @@ int ObAccessService::table_scan(
     ret = OB_ERR_UNEXPECTED;
     LOG_ERROR("tablet service should not be null.", K(ret), K(ls_id));
   } else if (OB_FAIL(tablet_service->table_scan(*iter, param))) {
+    // 主要：tablet_service做table_scan，内部负责设置iter
     LOG_WARN("Fail to scan table, ", K(ret), K(ls_id), K(param));
   } else {
     NG_TRACE(storage_table_scan_end);

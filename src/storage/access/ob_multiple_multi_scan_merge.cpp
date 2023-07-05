@@ -154,6 +154,7 @@ int ObMultipleMultiScanMerge::construct_iters()
 
   consumer_cnt_ = 0;
   if (OB_UNLIKELY(iters_.count() > 0 && iters_.count() != tables_.count())) {
+    // 非初次调用时
     ret = OB_ERR_UNEXPECTED;
     STORAGE_LOG(WARN, "iter cnt is not equal to table cnt", K(ret), "iter cnt", iters_.count(),
         "table cnt", tables_.count(), KP(this));
@@ -164,6 +165,7 @@ int ObMultipleMultiScanMerge::construct_iters()
     bool use_cache_iter = iters_.count() > 0;
 
     if (OB_FAIL(set_rows_merger(tables_.count()))) {
+      // 设置rows_merger
       STORAGE_LOG(WARN, "Failed to alloc rows merger", K(ret));
     }
 
@@ -171,19 +173,24 @@ int ObMultipleMultiScanMerge::construct_iters()
       if (OB_FAIL(tables_.at(i, table))) {
         STORAGE_LOG(WARN, "Fail to get i store, ", K(i), K(ret));
       } else if (OB_ISNULL(iter_param = get_actual_iter_param(table))) {
+        // 获取actual iter param
         ret = OB_ERR_UNEXPECTED;
         STORAGE_LOG(WARN, "Fail to get access param", K(i), K(ret), K(*table));
       } else if (!use_cache_iter) {
         if (OB_FAIL(table->multi_scan(*iter_param, *access_ctx_, *ranges_, iter))) {
+          // 主要：获取iter
           STORAGE_LOG(WARN, "Fail to get iterator, ", K(ret), K(i), K(*iter_param));
         } else if (OB_FAIL(iters_.push_back(iter))) {
+          // 将获取到的iter添加到iters_数组中
           iter->~ObStoreRowIterator();
           STORAGE_LOG(WARN, "Fail to push iter to iterator array, ", K(ret), K(i));
         }
       } else if (OB_ISNULL(iter = iters_.at(tables_.count() - 1 - i))) {
+        // 即刚添加的iter
         ret = OB_ERR_UNEXPECTED;
         STORAGE_LOG(WARN, "Unexpected null iter", K(ret), "idx", tables_.count() - 1 - i, K_(iters));
       } else if (OB_FAIL(iter->init(*iter_param, *access_ctx_, table, ranges_))) {
+        // 刚添加的iter做init
         STORAGE_LOG(WARN, "failed to init scan iter", K(ret), "idx", tables_.count() - i);
       }
 

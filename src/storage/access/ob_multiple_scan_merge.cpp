@@ -67,15 +67,18 @@ int ObMultipleScanMerge::init(
 {
   int ret = OB_SUCCESS;
   if (OB_FAIL(ObMultipleMerge::init(param, context, get_table_param))) {
+    // 主要：包括给迭代器 prepare read tables、给row分配内存
     STORAGE_LOG(WARN, "failed to init ObMultipleMerge", K(ret), K(param), K(context), K(get_table_param));
   } else {
     const ObTableReadInfo *read_info = nullptr;
     if (OB_ISNULL(read_info = access_param_->iter_param_.get_read_info())) {
+      // 从iter_param获取read info
       ret = OB_ERR_UNEXPECTED;
       STORAGE_LOG(WARN, "Failed to get out col descs", K(ret));
     } else if (OB_FAIL(tree_cmp_.init(access_param_->iter_param_.get_schema_rowkey_count(),
                                       read_info->get_datum_utils(),
                                       access_ctx_->query_flag_.is_reverse_scan()))) {
+      // 初始化败者树
       STORAGE_LOG(WARN, "init tree cmp fail", K(ret), K(access_param_->iter_param_));
     }
   }
@@ -154,6 +157,7 @@ int ObMultipleScanMerge::construct_iters()
     ret = OB_ERR_UNEXPECTED;
     STORAGE_LOG(WARN, "range is NULL", K(ret));
   } else if (OB_UNLIKELY(iters_.count() > 0 && iters_.count() != tables_.count())) {
+    // 非初次调用时
     ret = OB_ERR_UNEXPECTED;
     STORAGE_LOG(WARN, "iter cnt is not equal to table cnt", K(ret), "iter cnt", iters_.count(),
         "table cnt", tables_.count(), KP(this));
@@ -165,6 +169,7 @@ int ObMultipleScanMerge::construct_iters()
     const int64_t table_cnt = tables_.count()  - 1;
 
     if (OB_FAIL(set_rows_merger(tables_.count()))) {
+      // 设置rows_merger: 给rows merger分配内存并init
       STORAGE_LOG(WARN, "Failed to alloc rows merger", K(ret), K(tables_));
     }
 
@@ -173,19 +178,24 @@ int ObMultipleScanMerge::construct_iters()
       if (OB_FAIL(tables_.at(i, table))) {
         STORAGE_LOG(WARN, "Fail to get ith store, ", K(i), K(ret));
       } else if (OB_ISNULL(iter_pram = get_actual_iter_param(table))) {
+        // 获取actual iter param
         ret = OB_ERR_UNEXPECTED;
         STORAGE_LOG(WARN, "Fail to get access param", K(i), K(ret), K(*table));
       } else if (!use_cache_iter) {
         if (OB_FAIL(table->scan(*iter_pram, *access_ctx_, *range_, iter))) {
+          // 主要：构造+初始化iter
           STORAGE_LOG(WARN, "Fail to get iterator", K(ret), K(i), K(*iter_pram));
         } else if (OB_FAIL(iters_.push_back(iter))) {
+          // 将构造的iter添加到iters_数组中
           iter->~ObStoreRowIterator();
           STORAGE_LOG(WARN, "Fail to push iter to iterator array, ", K(ret), K(i));
         }
       } else if (OB_ISNULL(iter = iters_.at(table_cnt - i))) {
+        // 从cache获取iter
         ret = OB_ERR_UNEXPECTED;
         STORAGE_LOG(WARN, "Unexpected null iter", K(ret), "idx", table_cnt - i, K_(iters));
       } else if (OB_FAIL(iter->init(*iter_pram, *access_ctx_, table, range_))) {
+        // 从cache获取的iter，做init
         STORAGE_LOG(WARN, "failed to init scan iter", K(ret), "idx", table_cnt - i);
       }
 
@@ -233,12 +243,13 @@ int ObMultipleScanMerge::supply_consume()
   int ret = OB_SUCCESS;
   ObScanMergeLoserTreeItem item;
   for (int64_t i = 0; OB_SUCC(ret) && i < consumer_cnt_; ++i) {
+    // 遍历各个数据来源的迭代器
     const int64_t iter_idx = consumers_[i];
     ObStoreRowIterator *iter = iters_.at(iter_idx);
     if (NULL == iter) {
       ret = common::OB_ERR_UNEXPECTED;
       STORAGE_LOG(WARN, "Unexpected error", K(ret), K(iter));
-    } else if (OB_FAIL(iter->get_next_row_ext(item.row_, item.iter_flag_))) {
+    } else if (OB_FAIL(iter->get_next_row_ext(item.row_, item.iter_flag_))) { // 获取一行，内部调用 ObSSTableRowScanner<>::fetch_row
       if (OB_ITER_END != ret) {
         if (OB_PUSHDOWN_STATUS_CHANGED != ret) {
           STORAGE_LOG(WARN, "failed to get next row from iterator", "index", iter_idx, "iterator", *iter);
@@ -250,8 +261,10 @@ int ObMultipleScanMerge::supply_consume()
       ret = OB_ERR_UNEXPECTED;
       STORAGE_LOG(WARN, "get next row return NULL row", "iter_index", iter_idx, K(ret));
     } else {
+      // 把获取的新行加入败者树
       item.iter_idx_ = iter_idx;
       if (1 == consumer_cnt_) {
+        // 单个数据来源的优化
         if (OB_FAIL(rows_merger_->push_top(item))) {
           STORAGE_LOG(WARN, "push top error", K(ret));
         }
@@ -272,6 +285,7 @@ int ObMultipleScanMerge::supply_consume()
     if (rows_merger_->empty()) {
       ret = OB_ITER_END;
     } else if (OB_FAIL(rows_merger_->rebuild())) {
+      // 重建败者树
       STORAGE_LOG(WARN, "loser tree rebuild fail", K(ret), K(consumer_cnt_));
     } else {
       consumer_cnt_ = 0;
@@ -291,6 +305,7 @@ int ObMultipleScanMerge::inner_get_next_row(ObDatumRow &row)
   if (OB_UNLIKELY(0 == iters_.count())) {
     ret = OB_ITER_END;
   } else {
+    // 检查block scan，进行下推
     while (OB_SUCC(ret)) {
       STORAGE_LOG(DEBUG, "[PUSHDOWN] check condition of blockscan",
                   K(access_param_->iter_param_.pd_storage_flag_), K(consumer_cnt_));
@@ -300,6 +315,7 @@ int ObMultipleScanMerge::inner_get_next_row(ObDatumRow &row)
       row.count_ = 0;
       row.row_flag_.set_flag(ObDmlFlag::DF_NOT_EXIST);
 
+      // 单一数据来源的优化：跳过merge过程
       if (access_param_->iter_param_.enable_pd_blockscan() &&
           1 == consumer_cnt_) {
         // single consumer
@@ -307,7 +323,9 @@ int ObMultipleScanMerge::inner_get_next_row(ObDatumRow &row)
           ret = OB_ERR_UNEXPECTED;
           STORAGE_LOG(WARN, "Unexpected null iter", K(ret), K_(consumer_cnt));
         } else if (iter->can_blockscan()) {
+          // 数据无交集
           if (OB_FAIL(iter->get_next_row_ext(item.row_, item.iter_flag_))) {
+            // 迭代器迭代一行
             if (OB_ITER_END == ret) {
               consumer_cnt_ = 0;
               ret = OB_SUCCESS;
@@ -315,6 +333,7 @@ int ObMultipleScanMerge::inner_get_next_row(ObDatumRow &row)
               STORAGE_LOG(WARN, "Failed to get next row from iterator", K(ret));
             }
           } else if (!iter->can_blockscan() && !rows_merger_->empty()) {
+            // TODO: 如果下一行不能block scan，直接插到败者树的top???
             item.iter_idx_ = consumers_[0];
             if (OB_FAIL(rows_merger_->push_top(item))) {
               STORAGE_LOG(WARN, "push top error", K(ret));
@@ -325,33 +344,44 @@ int ObMultipleScanMerge::inner_get_next_row(ObDatumRow &row)
               need_supply_consume = false;
               ++row_stat_.inc_row_count_;
             }
+            // GOTO MERGE_ROW，需要做merge
           } else if (OB_FAIL(ObRowFuse::fuse_row(*(item.row_), row, nop_pos_, final_result))) {
+            // TODO: 下一行可以block scan，或者败者树为空???
+            // 融合行，得到row
             STORAGE_LOG(WARN, "failed to merge rows", K(ret), KPC(item.row_), K(row));
           } else if (row.row_flag_.is_exist_without_delete() || (iter_del_row_ && row.row_flag_.is_delete())) {
+            // 检查行
             //success to get row directly from iterator without merge
+            // 成功在不需要merge的情况下拿到一行
             need_supply_consume = false;
             row.scan_index_ = item.row_->scan_index_;
             row.fast_filter_skipped_ = item.row_->fast_filter_skipped_;
             ++row_stat_.result_row_count_;
             ++row_stat_.base_row_count_;
             break;
+            // 直接跳过后续流程
           } else {
             //need retry
             consumer_cnt_ = 1;
             ++row_stat_.filt_del_count_;
             continue;
+            // 直接跳过后续流程，重试
           }
         }
       }
 
+      // GOTO HERE: MERGE_ROW，需要做merge
       if (OB_SUCC(ret)) {
         if (need_supply_consume && OB_FAIL(supply_consume())) {
+          // 多个迭代器，需要遍历各个迭代器获取行，把行插入败者树
           if (OB_UNLIKELY(OB_ITER_END != ret && OB_PUSHDOWN_STATUS_CHANGED != ret)) {
             STORAGE_LOG(WARN, "Failed to supply consume row, ", K(ret));
           }
         } else if (OB_FAIL(inner_merge_row(row))) {
+          // 用败者树归并
           STORAGE_LOG(WARN, "Failed to inner merge row, ", K(ret));
         } else {
+          // 检查行
           //check row
           if (row.row_flag_.is_exist_without_delete() || (iter_del_row_ && row.row_flag_.is_delete())) {
             //success to get row
@@ -388,8 +418,11 @@ int ObMultipleScanMerge::inner_merge_row(ObDatumRow &row)
 
   row.count_ = 0;
   row.row_flag_.set_flag(ObDmlFlag::DF_NOT_EXIST);
+  // 迭代到败者树为空 或者 不再有相同key的多个row
   while (OB_SUCC(ret) && !rows_merger_->empty() && (has_same_rowkey || first_row)) {
+    // 需要fuse
     has_same_rowkey = !rows_merger_->is_unique_champion();
+    // 拿到胜者
     if (OB_FAIL(rows_merger_->top(top_item))) {
       STORAGE_LOG(WARN, "get top item fail", K(ret));
     } else if (nullptr == top_item || nullptr == top_item->row_) {
@@ -402,6 +435,7 @@ int ObMultipleScanMerge::inner_merge_row(ObDatumRow &row)
 
     if (OB_SUCC(ret)) {
       // fuse the rows with the same min rowkey
+      // 把败者树的胜者加入fuse中
       if (!final_result) {
         row.scan_index_ = top_item->row_->scan_index_;
         if (OB_FAIL(ObRowFuse::fuse_row(*(top_item->row_), row, nop_pos_, final_result))) {
@@ -414,6 +448,7 @@ int ObMultipleScanMerge::inner_merge_row(ObDatumRow &row)
 
       if (OB_SUCC(ret)) {
         // record the consumer
+        // TODO: 这里没看懂，consumer在这里的作用是什么？
         consumers_[consumer_cnt_++] = top_item->iter_idx_;
         if (first_row && !has_same_rowkey) {
           // row data is only from the top item
@@ -423,6 +458,7 @@ int ObMultipleScanMerge::inner_merge_row(ObDatumRow &row)
             first_row = false;
           }
           // make the current rowkey's next row to the top
+          // 当前胜者从败者树中pop出来
           if (has_same_rowkey && OB_FAIL(rows_merger_->pop())) {
             STORAGE_LOG(WARN, "loser tree pop error", K(ret), KPC(rows_merger_));
           }
@@ -432,6 +468,7 @@ int ObMultipleScanMerge::inner_merge_row(ObDatumRow &row)
   }
 
   // pop current rowkey's last row
+  // pop当前key的最后一行（收尾）
   if (OB_SUCC(ret)) {
     if (OB_FAIL(rows_merger_->pop())) {
       STORAGE_LOG(WARN, "loser tree pop error", K(ret), K(has_same_rowkey), KPC(rows_merger_));
