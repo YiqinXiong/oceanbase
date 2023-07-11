@@ -447,10 +447,8 @@ int ObRLEDecoder::set_res_with_bitset(
       next_row_id = i != meta_header_->count_ - 1
                           ? row_ids.at_(meta_header_->payload_, i + 1)
                           : col_ctx.micro_block_header_->row_count_;
-      for (int64_t idx = row_id; OB_SUCC(ret) && idx < next_row_id; ++idx) {
-        if (OB_FAIL(result_bitmap.set(idx))) {
-          LOG_WARN("Failed to set result_bitmap", K(ret), K(row_id), K(next_row_id), K(idx));
-        }
+      if (OB_FAIL(result_bitmap.set_n(row_id, next_row_id - row_id))) {
+        LOG_WARN("Failed to set_n result_bitmap", K(ret), K(row_id), K(next_row_id));
       }
     }
   }

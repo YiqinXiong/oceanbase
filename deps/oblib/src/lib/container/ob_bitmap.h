@@ -71,6 +71,12 @@ public:
   OB_INLINE int set(const size_type pos, const bool value = true);
 
   /**
+   * set n bits at %pos if value true
+   * or wipe out bits at %pos if value false
+   */
+  OB_INLINE int set_n(const size_type pos, const size_type n, const bool value = true);
+
+  /**
    * same as set(pos, false);
    */
   OB_INLINE int wipe(const size_type pos);
@@ -380,6 +386,84 @@ OB_INLINE int ObBitmap::set(const size_type pos, const bool value)
       cur_mem_block->bits_[inner_pos >> BLOCK_MOD_BITS] |= (1ULL << (inner_pos & BLOCK_MOD_MASK));
     } else {
       cur_mem_block->bits_[inner_pos >> BLOCK_MOD_BITS] &= (~(1ULL << (inner_pos & BLOCK_MOD_MASK)));
+    }
+  }
+  return ret;
+}
+
+OB_INLINE int ObBitmap::set_n(const size_type pos, const size_type n, const bool value) {
+  int ret = OB_SUCCESS;
+  if (OB_UNLIKELY(pos + n - 1 >= valid_bits_)) {
+    ret = OB_ERROR_OUT_OF_RANGE;
+    LIB_LOG(WARN, "Pos out of valid bits", K(ret), K(pos), K(n), K(valid_bits_));
+  } else if (OB_UNLIKELY(BITS_PER_BLOCK != 64)) {
+    LIB_LOG(WARN, "BITS_PER_BLOCK not euqal to 64, do retro single set", K(ret), K(BITS_PER_BLOCK));
+    for (int64_t idx = pos; OB_SUCC(ret) && idx < pos + n; ++idx) {
+      if (OB_FAIL(set(idx))) {
+        LIB_LOG(WARN, "Failed to set result_bitmap", K(ret), K(pos), K(pos + n), K(idx));
+      }
+    }
+  } else {
+    size_type inner_pos = pos;
+    MemBlock *cur_mem_block = header_;
+    while (MEM_BLOCK_BITS <= inner_pos) {
+      cur_mem_block = cur_mem_block->next_;
+      inner_pos -= MEM_BLOCK_BITS;
+    }
+    // the number of bits we are going to set
+    size_type rest_bits_num = n;
+    size_type block_idx = inner_pos >> BLOCK_MOD_BITS;
+    size_type cur_block_valid_bits_num =
+        (block_idx + 1) * BITS_PER_BLOCK - inner_pos;
+    size_type first_block_bits_num =
+        OB_MIN(rest_bits_num, cur_block_valid_bits_num);
+    // 1. set first_block_bits_num bits, starting from inner_pos
+    if (OB_UNLIKELY(first_block_bits_num == BITS_PER_BLOCK)) {
+      if (value) {
+        cur_mem_block->bits_[block_idx] = 0xFFFFFFFFFFFFFFFFULL;
+      } else {
+        cur_mem_block->bits_[block_idx] = 0ULL;
+      }
+    } else {
+      // (1ULL << rest_bits) -1 means a mask that low rest_bits_num bits are 1
+      // eg. rest_bits_num=3, mask=0000...0111
+      if (value) {
+        cur_mem_block->bits_[block_idx] |=
+            ((1ULL << first_block_bits_num) - 1ULL)
+            << (inner_pos & BLOCK_MOD_MASK);
+      } else {
+        cur_mem_block->bits_[block_idx] &=
+            ~(((1ULL << first_block_bits_num) - 1ULL)
+              << (inner_pos & BLOCK_MOD_MASK));
+      }
+    }
+    rest_bits_num -= first_block_bits_num;
+    ++block_idx;
+    // 2. set whole block bits if needed
+    while (rest_bits_num >= BITS_PER_BLOCK) {
+      if (OB_UNLIKELY(block_idx >= BLOCKS_PER_MEM_BLOCK)) {
+        cur_mem_block = cur_mem_block->next_;
+        block_idx = 0;
+      }
+      if (value) {
+        cur_mem_block->bits_[block_idx] = 0xFFFFFFFFFFFFFFFFULL;
+      } else {
+        cur_mem_block->bits_[block_idx] = 0ULL;
+      }
+      rest_bits_num -= BITS_PER_BLOCK;
+      ++block_idx;
+    }
+    // 3. set rest bits less than BITS_PER_BLOCK
+    if (rest_bits_num > 0) {
+      if (block_idx >= BLOCKS_PER_MEM_BLOCK) {
+        cur_mem_block = cur_mem_block->next_;
+        block_idx = 0;
+      }
+      if (value) {
+        cur_mem_block->bits_[block_idx] |= (1ULL << rest_bits_num) - 1ULL;
+      } else {
+        cur_mem_block->bits_[block_idx] &= ~((1ULL << rest_bits_num) - 1ULL);
+      }
     }
   }
   return ret;
