@@ -393,7 +393,7 @@ OB_INLINE int ObBitmap::set(const size_type pos, const bool value)
 
 OB_INLINE int ObBitmap::set_n(const size_type pos, const size_type n, const bool value) {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(pos + n - 1 >= valid_bits_)) {
+  if (OB_UNLIKELY(pos + n > valid_bits_)) {
     ret = OB_ERROR_OUT_OF_RANGE;
     LIB_LOG(WARN, "Pos out of valid bits", K(ret), K(pos), K(n), K(valid_bits_));
   } else if (OB_UNLIKELY(BITS_PER_BLOCK != 64)) {
@@ -410,59 +410,49 @@ OB_INLINE int ObBitmap::set_n(const size_type pos, const size_type n, const bool
       cur_mem_block = cur_mem_block->next_;
       inner_pos -= MEM_BLOCK_BITS;
     }
-    // the number of bits we are going to set
-    size_type rest_bits_num = n;
-    size_type block_idx = inner_pos >> BLOCK_MOD_BITS;
-    size_type cur_block_valid_bits_num =
-        (block_idx + 1) * BITS_PER_BLOCK - inner_pos;
-    size_type first_block_bits_num =
-        OB_MIN(rest_bits_num, cur_block_valid_bits_num);
-    // 1. set first_block_bits_num bits, starting from inner_pos
-    if (OB_UNLIKELY(first_block_bits_num == BITS_PER_BLOCK)) {
-      if (value) {
-        cur_mem_block->bits_[block_idx] = 0xFFFFFFFFFFFFFFFFULL;
-      } else {
-        cur_mem_block->bits_[block_idx] = 0ULL;
-      }
+    // block index in current mem block
+    size_type block_idx = block_index(inner_pos);
+    // split bits to 3 parts
+    size_type first_block_bits = min(n, BITS_PER_BLOCK - bit_index(inner_pos));
+    size_type inner_blocks = (n - first_block_bits) >> BLOCK_MOD_BITS;
+    size_type last_block_bits = (n - first_block_bits) & BLOCK_MOD_MASK;
+
+    // 1. set bits in the first block, starting from inner_pos
+    if (OB_UNLIKELY(first_block_bits == BITS_PER_BLOCK)) {
+      cur_mem_block->bits_[block_idx] = value ? uint64_t(-1) : 0ULL;
     } else {
-      // (1ULL << rest_bits) -1 means a mask that low rest_bits_num bits are 1
-      // eg. rest_bits_num=3, mask=0000...0111
+      // (1ULL << x) -1 means a mask that low x bits are 1
+      // eg. x=3, mask=0000...0111
       if (value) {
-        cur_mem_block->bits_[block_idx] |=
-            ((1ULL << first_block_bits_num) - 1ULL)
-            << (inner_pos & BLOCK_MOD_MASK);
+        cur_mem_block->bits_[block_idx] |= ((1ULL << first_block_bits) - 1ULL)
+                                           << (inner_pos & BLOCK_MOD_MASK);
       } else {
-        cur_mem_block->bits_[block_idx] &=
-            ~(((1ULL << first_block_bits_num) - 1ULL)
-              << (inner_pos & BLOCK_MOD_MASK));
+        cur_mem_block->bits_[block_idx] &= ~(((1ULL << first_block_bits) - 1ULL)
+                                             << (inner_pos & BLOCK_MOD_MASK));
       }
     }
-    rest_bits_num -= first_block_bits_num;
     ++block_idx;
-    // 2. set whole block bits if needed
-    while (rest_bits_num >= BITS_PER_BLOCK) {
+
+    // 2. set bits by whole block
+    for (; inner_blocks > 0; --inner_blocks) {
       if (OB_UNLIKELY(block_idx >= BLOCKS_PER_MEM_BLOCK)) {
         cur_mem_block = cur_mem_block->next_;
         block_idx = 0;
       }
-      if (value) {
-        cur_mem_block->bits_[block_idx] = 0xFFFFFFFFFFFFFFFFULL;
-      } else {
-        cur_mem_block->bits_[block_idx] = 0ULL;
-      }
-      rest_bits_num -= BITS_PER_BLOCK;
+      cur_mem_block->bits_[block_idx] = value ? uint64_t(-1) : 0ULL;
       ++block_idx;
     }
-    // 3. set rest bits less than BITS_PER_BLOCK
-    if (rest_bits_num > 0) {
+
+    // 3. set rest bits in the last block
+    if (last_block_bits > 0) {
       if (block_idx >= BLOCKS_PER_MEM_BLOCK) {
         cur_mem_block = cur_mem_block->next_;
         block_idx = 0;
       }
       if (value) {
-        cur_mem_block->bits_[block_idx] |= (1ULL << rest_bits_num) - 1ULL;
+        cur_mem_block->bits_[block_idx] |= (1ULL << last_block_bits) - 1ULL;
       } else {
-        cur_mem_block->bits_[block_idx] &= ~((1ULL << rest_bits_num) - 1ULL);
+        cur_mem_block->bits_[block_idx] &= ~((1ULL << last_block_bits) - 1ULL);
       }
     }
   }
