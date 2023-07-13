@@ -117,10 +117,12 @@ private:
       const unsigned char* col_data,
       const sql::ObWhiteFilterExecutor &filter,
       ObBitmap &result_bitmap,
+      const ObFPIntCmpOpType &cmp_op_type,
       int (*lambda)(
-          uint64_t &cur_int,
+          const ObObj &cur_obj,
           const sql::ObWhiteFilterExecutor &filter,
-          bool &result)) const;
+          bool &result,
+          const ObFPIntCmpOpType &cmp_op_type)) const;
 private:
   const ObIntegerBaseDiffHeader *header_;
   uint64_t base_;
