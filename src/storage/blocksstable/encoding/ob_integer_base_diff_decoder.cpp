@@ -261,7 +261,7 @@ int ObIntegerBaseDiffDecoder::pushdown_operator(
                   col_data,
                   filter,
                   result_bitmap))) {
-        LOG_WARN("Failed on EQ / NE operator", K(ret), K(col_ctx));
+        LOG_WARN("Failed on COMPARISON operator", K(ret), K(col_ctx));
       }
       break;
     }
@@ -346,11 +346,6 @@ int ObIntegerBaseDiffDecoder::comparison_operator(
     // Filter type not match with column type, back to retro path
     ret = OB_NOT_SUPPORTED;
     LOG_DEBUG("Type not match, back to retrograde path", K(col_ctx), K(filter));
-  } else if (col_ctx.obj_meta_.get_type_class() == ObFloatTC
-            || col_ctx.obj_meta_.get_type_class() == ObDoubleTC) {
-    // Can't compare by uint directly, support this later with float point number compare later
-    ret = OB_NOT_SUPPORTED;
-    LOG_DEBUG("Double/Float with INT_DIFF encoding, back to retro path", K(col_ctx));
   } else if (OB_UNLIKELY((column_sc != ObIntSC) && (column_sc != ObUIntSC))) { 
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Integer base encoding should only encode data as IntSC or UIntSC", K(ret), K(filter));
@@ -413,6 +408,9 @@ int ObIntegerBaseDiffDecoder::bt_operator(
                   || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Filter pushdown operator: Invalid argument", K(ret), K(col_ctx));
+  } else if (OB_UNLIKELY((column_sc != ObIntSC) && (column_sc != ObUIntSC))) { 
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("Integer base encoding should only encode data as IntSC or UIntSC", K(ret), K(filter));
   } else if (OB_UNLIKELY((col_ctx.obj_meta_.get_type() != filter.get_objs().at(0).get_type())
                          || (col_ctx.obj_meta_.get_type() != filter.get_objs().at(1).get_type()))) {
     // Filter type not match with column type or obj0 type not match with obj1
@@ -423,14 +421,6 @@ int ObIntegerBaseDiffDecoder::bt_operator(
     // Between left bound large than right bound
     // return all-false bitmap
     LOG_DEBUG("Hit shortcut, obj_left > obj_right, return all-false bitmap", K(obj_right), K(obj_right));
-  } else if (col_ctx.obj_meta_.get_type_class() == ObFloatTC
-             || col_ctx.obj_meta_.get_type_class() == ObDoubleTC) {
-    // Can't compare by uint directly, support this later with float point number compare later
-    ret = OB_NOT_SUPPORTED;
-    LOG_DEBUG("Double/Float with INT_DIFF encoding, back to retro path", K(col_ctx));
-  } else if (OB_UNLIKELY((column_sc != ObIntSC) && (column_sc != ObUIntSC))) { 
-    ret = OB_ERR_UNEXPECTED;
-    LOG_WARN("Integer base encoding should only encode data as IntSC or UIntSC", K(ret), K(filter));
   } else {
     ObObj base_obj;
     base_obj.copy_meta_type(col_ctx.obj_meta_);
