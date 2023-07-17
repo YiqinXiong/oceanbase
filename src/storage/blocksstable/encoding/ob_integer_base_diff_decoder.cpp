@@ -404,6 +404,8 @@ int ObIntegerBaseDiffDecoder::bt_operator(
 {
   int ret = OB_SUCCESS;
   ObObjTypeStoreClass column_sc = get_store_class_map()[col_ctx.obj_meta_.get_type_class()];
+  const ObObj &obj_left = filter.get_objs().at(0);
+  const ObObj &obj_right = filter.get_objs().at(1);
   if (OB_UNLIKELY(NULL == col_data
                   || result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() != 2
@@ -417,6 +419,10 @@ int ObIntegerBaseDiffDecoder::bt_operator(
     // back to retro path
     ret = OB_NOT_SUPPORTED;
     LOG_DEBUG("Type not match, back to retrograde path", K(col_ctx), K(filter));
+  } else if (obj_left > obj_right){
+    // Between left bound large than right bound
+    // return all-false bitmap
+    LOG_DEBUG("Hit shortcut, obj_left > obj_right, return all-false bitmap", K(obj_right), K(obj_right));
   } else if (col_ctx.obj_meta_.get_type_class() == ObFloatTC
              || col_ctx.obj_meta_.get_type_class() == ObDoubleTC) {
     // Can't compare by uint directly, support this later with float point number compare later
@@ -429,14 +435,12 @@ int ObIntegerBaseDiffDecoder::bt_operator(
     ObObj base_obj;
     base_obj.copy_meta_type(col_ctx.obj_meta_);
     base_obj.v_.uint64_ = base_;
-    bool filter_obj_smaller_than_base = filter.get_objs().at(1) < base_obj;
+    bool filter_obj_smaller_than_base = obj_right < base_obj;
 
     if (filter_obj_smaller_than_base) {
       // Do not need to decode the data
-      // All rows except null value are true
-      if (OB_FAIL(result_bitmap.bit_not())) {
-        LOG_WARN("Failed to flip all bits in bitmap", K(ret));
-      }
+      // All rows are false
+      LOG_DEBUG("Hit shortcut, obj_right < base_obj, return all-false bitmap", K(obj_right), K(base_obj));
     } else {
       // traverse and decode all data
       // do compare row by row
