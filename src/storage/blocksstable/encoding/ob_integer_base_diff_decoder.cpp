@@ -358,8 +358,7 @@ int ObIntegerBaseDiffDecoder::comparison_operator(
     ObFPIntCmpOpType cmp_op_type = get_white_op_int_op_map()[filter.get_op_type()];
     if (filter_obj_smaller_than_base) {
       // Do not need to decode the data
-      if ((filter_obj_smaller_than_base &&
-           (cmp_op_type == FP_INT_OP_GE || cmp_op_type == FP_INT_OP_GT)) ||
+      if ((cmp_op_type == FP_INT_OP_GE || cmp_op_type == FP_INT_OP_GT) ||
           cmp_op_type == FP_INT_OP_NE) {
         // All rows except null value are true
         if (OB_FAIL(result_bitmap.bit_not())) {
@@ -430,6 +429,7 @@ int ObIntegerBaseDiffDecoder::bt_operator(
     if (filter_obj_smaller_than_base) {
       // Do not need to decode the data
       // All rows are false
+      result_bitmap.reuse();
       LOG_DEBUG("Hit shortcut, obj_right < base_obj, return all-false bitmap", K(obj_right), K(base_obj));
     } else {
       // traverse and decode all data
@@ -480,10 +480,9 @@ int ObIntegerBaseDiffDecoder::in_operator(
 
     if (filter_obj_smaller_than_base) {
       // Do not need to decode the data
-      // All rows except null value are true
-      if (OB_FAIL(result_bitmap.bit_not())) {
-        LOG_WARN("Failed to flip all bits in bitmap", K(ret));
-      }
+      // All rows are false
+      result_bitmap.reuse();
+      LOG_DEBUG("Hit shortcut, max(obj_set) < base_obj, return all-false bitmap", K(base_obj));
     } else {
       // traverse and decode all data
       // do compare row by row
