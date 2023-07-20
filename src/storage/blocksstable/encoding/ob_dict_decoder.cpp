@@ -792,8 +792,10 @@ int ObDictDecoder::comparison_operator(
     ObBitmap &result_bitmap) const
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
+  if (OB_UNLIKELY(NULL == col_data
+                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() != 1
+                  || filter.get_op_type() > sql::WHITE_OP_NE
                   || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Invalid argument for GT / LT operator", K(ret), K(col_data),
@@ -990,11 +992,12 @@ int ObDictDecoder::in_operator(
     ObBitmap &result_bitmap) const
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
+  if (OB_UNLIKELY(NULL == col_data
+                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() == 0
                   || filter.get_op_type() != sql::WHITE_OP_IN
                   || filter.null_param_contained())) {
-    LOG_WARN("Invalid argument for BT operator", K(ret),
+    LOG_WARN("Invalid argument for IN operator", K(ret),
              K(col_data), K(result_bitmap.size()), K(filter));
   } else {
     const int64_t count = meta_header_->count_;
