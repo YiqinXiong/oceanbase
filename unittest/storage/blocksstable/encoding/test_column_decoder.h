@@ -362,6 +362,7 @@ void TestColumnDecoder::basic_filter_pushdown_in_op_test()
   int64_t seed2 = 10002;
   int64_t seed3 = 10003;
   int64_t seed5 = 10005;
+  int64_t seedsub = 9999;
 
   for (int64_t i = 0; i < ROW_CNT - 40; ++i) {
     ASSERT_EQ(OB_SUCCESS, row_generate_.get_next_row(seed0, row));
@@ -408,6 +409,7 @@ void TestColumnDecoder::basic_filter_pushdown_in_op_test()
     }
     sql::ObPushdownWhiteFilterNode white_filter(allocator_);
     sql::ObPushdownWhiteFilterNode white_filter_2(allocator_);
+    sql::ObPushdownWhiteFilterNode white_filter_3(allocator_);
 
     ObMalloc mallocer;
     mallocer.set_label("ColumnDecoder");
@@ -422,7 +424,10 @@ void TestColumnDecoder::basic_filter_pushdown_in_op_test()
     setup_obj(ref_obj2, i, seed2);
     ObObj ref_obj5;
     setup_obj(ref_obj5, i, seed5);
+    ObObj ref_objsub;
+    setup_obj(ref_objsub, i, seedsub);
 
+    // obj1 and obj2 exist, but obj5 not exists
     objs.push_back(ref_obj1);
     objs.push_back(ref_obj2);
     objs.push_back(ref_obj5);
@@ -437,6 +442,7 @@ void TestColumnDecoder::basic_filter_pushdown_in_op_test()
     ASSERT_EQ(OB_SUCCESS, test_filter_pushdown(col_idx, is_retro_, decoder, white_filter, result_bitmap, objs));
     ASSERT_EQ(seed1_count + seed2_count, result_bitmap.popcnt());
 
+    // params not exist
     objs.reuse();
     objs.init(3);
     objs.push_back(ref_obj5);
@@ -447,6 +453,20 @@ void TestColumnDecoder::basic_filter_pushdown_in_op_test()
     result_bitmap.reuse();
     ASSERT_EQ(0, result_bitmap.popcnt());
     ASSERT_EQ(OB_SUCCESS, test_filter_pushdown(col_idx, is_retro_, decoder, white_filter_2, result_bitmap, objs));
+    ASSERT_EQ(0, result_bitmap.popcnt());
+
+    // Try hit shortcut in IntBaseDiff decoder
+    // because ref_objsub=9999 is smaller than base(seed0=10000)
+    objs.reuse();
+    objs.init(3);
+    objs.push_back(ref_objsub);
+    objs.push_back(ref_objsub);
+    objs.push_back(ref_objsub);
+    white_filter_3.op_type_ = sql::WHITE_OP_IN;
+
+    result_bitmap.reuse();
+    ASSERT_EQ(0, result_bitmap.popcnt());
+    ASSERT_EQ(OB_SUCCESS, test_filter_pushdown(col_idx, is_retro_, decoder, white_filter_3, result_bitmap, objs));
     ASSERT_EQ(0, result_bitmap.popcnt());
   }
 }
