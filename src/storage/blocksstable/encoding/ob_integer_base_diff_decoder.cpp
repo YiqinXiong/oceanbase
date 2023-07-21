@@ -419,6 +419,7 @@ int ObIntegerBaseDiffDecoder::bt_operator(
   } else if (obj_left > obj_right){
     // Between left bound large than right bound
     // return all-false bitmap
+    result_bitmap.reuse();
     LOG_DEBUG("Hit shortcut, obj_left > obj_right, return all-false bitmap", K(obj_right), K(obj_right));
   } else {
     ObObj base_obj;
@@ -476,7 +477,7 @@ int ObIntegerBaseDiffDecoder::in_operator(
     base_obj.copy_meta_type(col_ctx.obj_meta_);
     base_obj.v_.uint64_ = base_;
     // TODO: use max(obj_set) compare with base
-    bool filter_obj_smaller_than_base = false;
+    bool filter_obj_smaller_than_base = filter.get_max_param() < base_obj;
 
     if (filter_obj_smaller_than_base) {
       // Do not need to decode the data
@@ -494,8 +495,11 @@ int ObIntegerBaseDiffDecoder::in_operator(
                         bool &result,
                         const ObFPIntCmpOpType &cmp_op_type) -> int {
                        int ret = OB_SUCCESS;
-                       if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
-                         LOG_WARN("Failed to check object in hashset", K(ret), K(cur_obj));
+                       if (filter.is_in_params(cur_obj)) {
+                        // fast pass element which is not in params
+                        if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
+                          LOG_WARN("Failed to check object in hashset", K(ret), K(cur_obj));
+                        }
                        }
                        return ret;
                      }))) {

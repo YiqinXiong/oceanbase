@@ -665,14 +665,17 @@ int ObConstDecoder::in_operator(
     ObBitmap &result_bitmap) const
 {
   int ret = OB_SUCCESS;
+  const ObDictMetaHeader* dict_meta_header = dict_decoder_.get_dict_header();
   if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() == 0
                   || filter.get_op_type() != sql::WHITE_OP_IN
                   || filter.null_param_contained())) {
     LOG_WARN("Invalid argument for IN operator",
              K(ret), K(result_bitmap.size()), K(filter));
+  } else if (OB_UNLIKELY(OB_ISNULL(dict_meta_header))) {
+    LOG_WARN("dict meta header is NULL", K(ret));
   } else {
-    int64_t dict_count = dict_decoder_.get_dict_header()->count_;
+    const int64_t dict_count = dict_meta_header->count_;
     const ObIntArrayFuncTable &row_ids = ObIntArrayFuncTable::instance(meta_header_->row_id_byte_);
     const int64_t dict_meta_length = col_ctx.col_header_->length_ - meta_header_->offset_;
     bool const_in_result_set = false;
@@ -697,29 +700,69 @@ int ObConstDecoder::in_operator(
       }
     }
 
-    if (OB_SUCC(ret)) {
-      bool found = false;
-      ObDictDecoderIterator trav_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
-      ObDictDecoderIterator end_it = dict_decoder_.end(&col_ctx, dict_meta_length);
+    if (OB_SUCC(ret) && dict_count > 0) {
+      // iterators
+      ObDictDecoderIterator traverse_it;
+      const ObDictDecoderIterator begin_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
+      const ObDictDecoderIterator end_it = dict_decoder_.end(&col_ctx, dict_meta_length);
+      // init ref_bitset
       const int64_t ref_bitset_size = dict_count + 1;
       char ref_bitset_buf[sql::ObBitVector::memory_size(ref_bitset_size)];
       sql::ObBitVector *ref_bitset = sql::to_bit_vector(ref_bitset_buf);
       ref_bitset->init(ref_bitset_size);
+      // common variables
+      bool found = false;
       int64_t dict_ref = 0;
-      while (OB_SUCC(ret) && trav_it != end_it) {
-        bool cur_in_result_set = false;
-        if (OB_UNLIKELY(((*trav_it).is_null_oracle() && lib::is_oracle_mode())
-                        || ((*trav_it).is_null() && lib::is_mysql_mode()))) {
-          ret = OB_ERR_UNEXPECTED;
-          LOG_WARN("There should not be null object in dictionary", K(ret));
-        } else if (OB_FAIL(filter.exist_in_obj_set((*trav_it), cur_in_result_set))) {
-          LOG_WARN("Failed to check wheter current value is in set", K(ret));
-        } else if (!const_in_result_set == cur_in_result_set) {
-          found = true;
-          ref_bitset->set(dict_ref);
+      bool is_exist = false;
+
+      if (dict_meta_header->is_sorted_dict()) {
+        // Sorted dictionary, binary search here to find boundary element
+        const ObObj &first_dict = *(dict_decoder_.begin(&col_ctx, dict_meta_length));
+        const ObObj &last_dict = *(dict_decoder_.end(&col_ctx, dict_meta_length) - 1);
+        const ObObj &min_param = filter.get_min_param();
+        const ObObj &max_param = filter.get_max_param();
+        if (last_dict < min_param || first_dict > max_param) {
+          LOG_DEBUG("Hit shortcut, no cross, return all-false bitmap", K(first_dict), K(last_dict));
+        } else {
+          ObDictDecoderIterator left_bound_inclusive = std::lower_bound(begin_it, end_it, min_param);
+          ObDictDecoderIterator right_bound_exclusive = std::upper_bound(begin_it, end_it, max_param);
+          traverse_it = left_bound_inclusive;
+          dict_ref = left_bound_inclusive - begin_it;
+          while (OB_SUCC(ret) && traverse_it != right_bound_exclusive) {
+            if (OB_UNLIKELY(((*traverse_it).is_null_oracle() && lib::is_oracle_mode())
+                            || ((*traverse_it).is_null() && lib::is_mysql_mode()))) {
+              ret = OB_ERR_UNEXPECTED;
+              LOG_WARN("There should not be null object in dictionary", K(ret));
+            } else if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
+              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
+            } else if (!const_in_result_set == is_exist) {
+              found = true;
+              ref_bitset->set(dict_ref);
+            }
+            ++traverse_it;
+            ++dict_ref;
+          }
         }
-        ++dict_ref;
-        ++trav_it;
+      } else {
+        // Unsorted dictionary, Traverse dictionary
+        traverse_it = begin_it;
+        while (OB_SUCC(ret) && traverse_it != end_it) {
+          if (OB_UNLIKELY(((*traverse_it).is_null_oracle() && lib::is_oracle_mode())
+                          || ((*traverse_it).is_null() && lib::is_mysql_mode()))) {
+            ret = OB_ERR_UNEXPECTED;
+            LOG_WARN("There should not be null object in dictionary", K(ret));
+          } else if (filter.is_in_params(*traverse_it)) {
+            // fast pass element which is not in params
+            if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
+              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
+            } else if (!const_in_result_set == is_exist) {
+              found = true;
+              ref_bitset->set(dict_ref);
+            }
+          }
+          ++traverse_it;
+          ++dict_ref;
+        }
       }
 
       if (OB_FAIL(ret)) {
