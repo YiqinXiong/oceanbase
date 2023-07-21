@@ -967,6 +967,10 @@ int ObWhiteFilterExecutor::init_evaluated_datums()
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null expr", K(ret));
   } else {
+    // reset min/max param idx to default
+    max_param_idx_ = UINT64_MAX;
+    min_param_idx_ = UINT64_MAX;
+    // load objs from datum
     if (WHITE_OP_IN == filter_.get_op_type()) {
       // fill params_ for WHITE_OP_IN
       if (OB_FAIL(eval_in_right_val_to_objs())) {
