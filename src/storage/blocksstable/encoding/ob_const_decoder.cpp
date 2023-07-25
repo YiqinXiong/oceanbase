@@ -745,7 +745,7 @@ int ObConstDecoder::in_operator(
         }
       } else {
         // Unsorted dictionary, Traverse dictionary
-        traverse_it = begin_it;
+        traverse_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
         while (OB_SUCC(ret) && traverse_it != end_it) {
           if (OB_UNLIKELY(((*traverse_it).is_null_oracle() && lib::is_oracle_mode())
                           || ((*traverse_it).is_null() && lib::is_mysql_mode()))) {

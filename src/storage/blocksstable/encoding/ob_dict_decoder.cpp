@@ -1040,7 +1040,7 @@ int ObDictDecoder::in_operator(
         }
       } else {
         // Unsorted dictionary, Traverse dictionary
-        traverse_it = begin_it;
+        traverse_it = begin(&col_ctx, col_ctx.col_header_->length_);
         while (OB_SUCC(ret) && traverse_it != end_it) {
           if (filter.is_in_params(*traverse_it)) {
             // fast pass element which is not in params

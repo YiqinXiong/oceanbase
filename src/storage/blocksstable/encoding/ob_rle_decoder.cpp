@@ -411,7 +411,7 @@ int ObRLEDecoder::in_operator(
         }
       } else {
         // Unsorted dictionary, Traverse dictionary
-        traverse_it = begin_it;
+        traverse_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
         while (OB_SUCC(ret) && traverse_it != end_it) {
           if (filter.is_in_params(*traverse_it)) {
             // fast pass element which is not in params
