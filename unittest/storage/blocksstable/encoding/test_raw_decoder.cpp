@@ -359,8 +359,15 @@ int TestRawDecoder::test_filter_pushdown(
   void *obj_buf = allocator_.alloc(sizeof(ObObj) * COLUMN_CNT);
   EXPECT_TRUE(obj_buf != nullptr);
   ObObj *col_buf = new (obj_buf) ObObj [COLUMN_CNT]();
+  // procedure like ObWhiteFilterExecutor::init_evaluated_datums
+  filter.params_sorted_ = false;
+  filter.params_need_sort_ = objs.count() > 0 && objs.count() < filter.SORT_ARRAY_THRESHOLD;
+  // filter.params_need_sort_ = false;
   filter.params_ = objs;
-  filter.init_obj_set();
+  if (sql::WHITE_OP_IN == filter.get_op_type()) {
+    filter.init_obj_set();
+  }
+  filter.init_min_max_param_idx();
   pd_filter_info.col_buf_ = col_buf;
   pd_filter_info.col_capacity_ = full_column_cnt_;
   pd_filter_info.start_ = 0;

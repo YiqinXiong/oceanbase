@@ -393,7 +393,13 @@ int ObRLEDecoder::in_operator(
         const ObObj &max_param = filter.get_max_param();
         if (last_dict < min_param || first_dict > max_param) {
           LOG_DEBUG("Hit shortcut, no cross, return all-false bitmap", K(first_dict), K(last_dict));
+        } else if (filter.is_obj_array_sorted()) {
+          // use sorted obj array, i.e. params_
+          if (OB_FAIL(set_ref_exist_in_ordered_obj_array(begin_it, end_it, filter.get_objs(), *ref_bitset, found))) {
+            LOG_WARN("Failed to check object in sorted array", K(ret));
+          }
         } else {
+          // use obj hashset
           ObDictDecoderIterator left_bound_inclusive = std::lower_bound(begin_it, end_it, min_param);
           ObDictDecoderIterator right_bound_exclusive = std::upper_bound(begin_it, end_it, max_param);
           traverse_it = left_bound_inclusive;
@@ -492,6 +498,34 @@ int ObRLEDecoder::set_res_with_bitset(
           LOG_WARN("Failed to set result_bitmap", K(ret), K(row_id), K(next_row_id), K(idx));
         }
       }
+    }
+  }
+  return ret;
+}
+
+int ObRLEDecoder::set_ref_exist_in_ordered_obj_array(
+    const ObDictDecoderIterator &dict_begin,
+    const ObDictDecoderIterator &dict_end,
+    const ObFixedArray<ObObj, ObIAllocator> &sorted_obj_array,
+    sql::ObBitVector &ref_bitset,
+    bool &found) const
+{
+  int ret = OB_SUCCESS;
+  found = false;
+  auto dict_it = dict_begin;
+  auto param_it = sorted_obj_array.begin();
+  // dual pointer to find cross item
+  while (dict_it != dict_end && param_it != sorted_obj_array.end()) {
+    if (*dict_it < *param_it) {
+      dict_it = std::lower_bound(dict_it, dict_end, *param_it);
+    } else if (*dict_it > *param_it) {
+      param_it = std::lower_bound(param_it, sorted_obj_array.end(), *dict_it);
+    } else {
+      // *dict_it == *param_it, current ref = dict_it - dict_begin
+      found = true;
+      ref_bitset.set(dict_it - dict_begin);
+      dict_it = std::upper_bound(dict_it, dict_end, *dict_it);
+      param_it = std::upper_bound(param_it, sorted_obj_array.end(), *param_it);
     }
   }
   return ret;
