@@ -558,7 +558,10 @@ int ObRawDecoder::pushdown_operator(
     case sql::WHITE_OP_LE: {
       int32_t fix_len_tag = 0;
       bool is_signed_data = false;
-      if (fast_filter_valid(col_ctx, filter.get_objs().at(0).meta_.get_type(), fix_len_tag, is_signed_data)) {
+      if (filter.get_objs().count() == 0) {
+        ret = OB_INVALID_ARGUMENT;
+        LOG_WARN("objs count is zero for comparison: Invalid argument", K(ret));
+      } else if (fast_filter_valid(col_ctx, filter.get_objs().at(0).meta_.get_type(), fix_len_tag, is_signed_data)) {
         if (OB_FAIL(fast_comparison_operator(col_ctx, col_data,
           filter, fix_len_tag, is_signed_data, result_bitmap))) {
           LOG_WARN("Failed on fast comparison operator", K(ret), K(col_ctx));
