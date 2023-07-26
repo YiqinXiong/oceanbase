@@ -467,8 +467,12 @@ public:
   bool is_obj_array_sorted() const { return params_sorted_; };
   OB_INLINE const ObObj &get_min_param() const { return params_.at(min_param_idx_); };
   OB_INLINE const ObObj &get_max_param() const { return params_.at(max_param_idx_); };
-  OB_INLINE bool is_in_params(const ObObj& obj) const 
-  { return (obj >= params_.at(min_param_idx_)) && (obj <= params_.at(max_param_idx_)); };
+  OB_INLINE bool is_in_params_range(const ObObj &obj) const
+  {
+    return min_param_idx_ == UINT64_MAX || max_param_idx_ == UINT64_MAX ||
+           ((obj >= params_.at(min_param_idx_)) &&
+            (obj <= params_.at(max_param_idx_)));
+  };
   OB_INLINE ObWhiteFilterOperatorType get_op_type() const
   { return filter_.get_op_type(); }
   INHERIT_TO_STRING_KV("ObPushdownWhiteFilterExecutor", ObPushdownFilterExecutor,

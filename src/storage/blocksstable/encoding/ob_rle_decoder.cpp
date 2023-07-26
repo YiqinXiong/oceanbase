@@ -419,7 +419,7 @@ int ObRLEDecoder::in_operator(
         // Unsorted dictionary, Traverse dictionary
         traverse_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
         while (OB_SUCC(ret) && traverse_it != end_it) {
-          if (filter.is_in_params(*traverse_it)) {
+          if (filter.is_in_params_range(*traverse_it)) {
             // fast pass element which is not in params
             if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
               LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));

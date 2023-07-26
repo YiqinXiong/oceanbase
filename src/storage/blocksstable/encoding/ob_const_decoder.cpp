@@ -760,7 +760,7 @@ int ObConstDecoder::in_operator(
                           || ((*traverse_it).is_null() && lib::is_mysql_mode()))) {
             ret = OB_ERR_UNEXPECTED;
             LOG_WARN("There should not be null object in dictionary", K(ret));
-          } else if (filter.is_in_params(*traverse_it)) {
+          } else if (filter.is_in_params_range(*traverse_it)) {
             // fast pass element which is not in params
             if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
               LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
