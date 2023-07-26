@@ -1007,7 +1007,8 @@ int ObWhiteFilterExecutor::eval_right_val_to_objs()
     ObDatum *datum = NULL;
     null_param_contained_ = false;
     // fill params_ for other WHITE_OP_XX
-    for (int64_t i = 0; OB_SUCC(ret) && i < expr.arg_cnt_; i++) {
+    ObObj param;
+    for (int64_t i = 0; OB_SUCC(ret) && i < expr.arg_cnt_; ++i) {
       const ObExpr *cur_arg = expr.args_[i];
       if (OB_ISNULL(cur_arg)) {
         ret = OB_ERR_UNEXPECTED;
@@ -1016,7 +1017,6 @@ int ObWhiteFilterExecutor::eval_right_val_to_objs()
         // skip column reference expr
         continue;
       } else {
-        ObObj param;  // TODO: move it out of loop
         if (OB_FAIL(cur_arg->eval(ctx, datum))) {
           LOG_WARN("evaluate filter arg expr failed", K(ret), K(i));
         } else if (OB_FAIL(datum->to_obj(param, cur_arg->obj_meta_, cur_arg->obj_datum_map_))) {
@@ -1054,8 +1054,8 @@ int ObWhiteFilterExecutor::eval_in_right_val_to_objs()
     } else {
       // for each param of WHITE_OP_IN
       // get right datum, transform to obj, append to params_
-      for (int i = 0; OB_SUCC(ret) && i < expr.inner_func_cnt_; i++) {
-        ObObj param;    // TODO: move it out of loop
+      ObObj param;
+      for (int i = 0; OB_SUCC(ret) && i < expr.inner_func_cnt_; ++i) {
         const ObExpr *cur_arg = expr.args_[1]->args_[i];
         if (OB_ISNULL(cur_arg)) {
           ret = OB_INVALID_ARGUMENT;
