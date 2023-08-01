@@ -495,11 +495,8 @@ int ObIntegerBaseDiffDecoder::in_operator(
                         bool &result,
                         const ObFPIntCmpOpType &cmp_op_type) -> int {
                        int ret = OB_SUCCESS;
-                       if (filter.is_in_params_range(cur_obj)) {
-                        // fast pass element which is not in params
-                        if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
-                          LOG_WARN("Failed to check object in hashset", K(ret), K(cur_obj));
-                        }
+                       if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
+                         LOG_WARN("Failed to check object in obj_set", K(ret), K(cur_obj));
                        }
                        return ret;
                      }))) {

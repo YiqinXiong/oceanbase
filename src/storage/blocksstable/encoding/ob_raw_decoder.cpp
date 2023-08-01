@@ -853,7 +853,7 @@ int ObRawDecoder::in_operator(
                       bool &result) -> int {
                       int ret = OB_SUCCESS;
                       if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
-                        LOG_WARN("Failed to check object in hashset", K(ret), K(cur_obj));
+                        LOG_WARN("Failed to check object in obj set", K(ret), K(cur_obj));
                       }
                       return ret;
                     }))) {
