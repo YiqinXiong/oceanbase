@@ -384,25 +384,18 @@ int ObRLEDecoder::in_operator(
       ref_bitset->init(ref_bitset_size);
       // common variables
       bool found = false;
-      int64_t dict_ref = 0;
-      bool is_exist = false;
-      bool is_no_need_traverse = false;
+      bool is_hit_shortcut = false;
+      bool is_sorted_dict = dict_meta_header->is_sorted_dict();
 
-      if (dict_meta_header->is_sorted_dict()) {
+      if (is_sorted_dict) {
         // Sorted dictionary, binary search here to find boundary element
         const ObObj &first_dict = *(dict_decoder_.begin(&col_ctx, dict_meta_length));
         const ObObj &last_dict = *(dict_decoder_.end(&col_ctx, dict_meta_length) - 1);
         const ObObj &min_param = filter.get_min_param();
         const ObObj &max_param = filter.get_max_param();
-        if (last_dict < min_param || first_dict > max_param) {
-          is_no_need_traverse = true;
+        if (filter.is_min_max_valid() && (last_dict < min_param || first_dict > max_param)) {
+          is_hit_shortcut = true;
           LOG_DEBUG("Hit shortcut, no cross, return all-false bitmap", K(first_dict), K(last_dict));
-        } else if (sql::ObWhiteFilterObjSetType::SORTED_ARRAY == filter.get_obj_set_type()) {
-          // use sorted obj array, i.e. params_
-          if (OB_FAIL(set_ref_exist_in_ordered_obj_array(begin_it, end_it, filter.get_objs(), *ref_bitset, found))) {
-            LOG_WARN("Failed to check object in sorted array", K(ret));
-          }
-          is_no_need_traverse = true;
         } else {
           // use other type of obj set
           left_it = std::lower_bound(begin_it, end_it, min_param);
@@ -410,20 +403,10 @@ int ObRLEDecoder::in_operator(
         }
       }
 
-      if (!is_no_need_traverse) {
-        ObDictDecoderIterator traverse_it = left_it;
-        int64_t dict_ref = left_it - begin_it;
-        while (OB_SUCC(ret) && traverse_it != right_it) {
-          const ObObj& cur_obj = *traverse_it;
-          if (OB_FAIL(filter.exist_in_obj_set(cur_obj, is_exist))) {
-            LOG_WARN("Failed to check object in obj set", K(ret), K(cur_obj));
-          } else if (is_exist) {
-            found = true;
-            ref_bitset->set(dict_ref);
-          }
-          ++traverse_it;
-          ++dict_ref;
-        }
+      if (!is_hit_shortcut && OB_FAIL(set_ref_exist_in_objs(
+                                  left_it, right_it, begin_it, is_sorted_dict,
+                                  filter, *ref_bitset, found))) {
+        LOG_WARN("Failed to check object in objs", K(ret));
       }
       if (found && OB_FAIL(set_res_with_bitset(parent, col_ctx, ref_bitset, result_bitmap))) {
         LOG_WARN("Failed to set result_bitmap", K(ret));
@@ -496,32 +479,95 @@ int ObRLEDecoder::set_res_with_bitset(
   return ret;
 }
 
-int ObRLEDecoder::set_ref_exist_in_ordered_obj_array(
-    const ObDictDecoderIterator &dict_begin,
-    const ObDictDecoderIterator &dict_end,
-    const ObFixedArray<ObObj, ObIAllocator> &sorted_obj_array,
-    sql::ObBitVector &ref_bitset,
-    bool &found) const
+int ObRLEDecoder::set_ref_exist_in_objs(
+      ObDictDecoderIterator &left_it,
+      ObDictDecoderIterator &right_it,
+      const ObDictDecoderIterator &begin_it,
+      bool is_sorted_dict,
+      const sql::ObWhiteFilterExecutor &filter,
+      sql::ObBitVector &ref_bitset,
+      bool &found) const
 {
   int ret = OB_SUCCESS;
+  // 1. choose a cmp type by length, delta and sort
+  sql::ObWhiteFilterObjSetCmpType cmp_type = filter.get_obj_set_cmp_type(right_it - left_it, is_sorted_dict);
+  // 2. do compare and get result
   found = false;
-  auto dict_it = dict_begin;
-  auto param_it = sorted_obj_array.begin();
-  // dual pointer to find cross item
-  while (dict_it != dict_end && param_it != sorted_obj_array.end()) {
-    const ObObj& dict_obj = *dict_it;
-    const ObObj& param_obj = *param_it;
-    if (dict_obj == param_obj) {
-      // *dict_it == *param_it, current ref = dict_it - dict_begin
-      found = true;
-      ref_bitset.set(dict_it - dict_begin);
-      dict_it = std::upper_bound(dict_it, dict_end, dict_obj);
-      param_it = std::upper_bound(param_it, sorted_obj_array.end(), param_obj);
-    } else if (dict_obj > param_obj) {
-      param_it = std::lower_bound(param_it, sorted_obj_array.end(), dict_obj);
-    } else {
-      dict_it = std::lower_bound(dict_it, dict_end, param_obj);
+  bool is_binary_search = false;
+  switch (cmp_type) {
+  case sql::ObWhiteFilterObjSetCmpType::DUAL_POINTER: {
+    const ObFixedArray<ObObj, ObIAllocator> &objs = filter.get_objs();
+    ObDictDecoderIterator &dict_it = left_it;
+    auto param_it = objs.begin();
+    int64_t ref_bitset_size = meta_header_->count_ + 1;
+    while (dict_it != right_it && param_it != objs.end()) {
+      const ObObj& dict_obj = *dict_it;
+      const ObObj& param_obj = *param_it;
+      if (dict_obj == param_obj) {
+        found = true;
+        ref_bitset.set(dict_it - begin_it);
+        dict_it = std::upper_bound(dict_it, right_it, dict_obj);
+        param_it = std::upper_bound(param_it, objs.end(), param_obj);
+      } else if (dict_obj > param_obj) {
+        param_it = std::lower_bound(param_it, objs.end(), dict_obj);
+      } else {
+        dict_it = std::lower_bound(dict_it, right_it, param_obj);
+      }
     }
+    break;
+  }
+  case sql::ObWhiteFilterObjSetCmpType::BINARY_SEARCH_DICT: {
+    const ObFixedArray<ObObj, ObIAllocator> &objs = filter.get_objs();
+    ObDictDecoderIterator dict_it;
+    auto param_it = objs.begin();
+    int64_t ref_bitset_size = meta_header_->count_ + 1;
+    while (param_it != objs.end()) {
+      const ObObj& param_obj = *param_it;
+      dict_it = std::lower_bound(left_it, right_it, param_obj, sql::ObWhiteFilterExecutor::param_cmp_less);
+      if (dict_it != right_it && *dict_it == param_obj) {
+        found = true;
+        ref_bitset.set(dict_it - begin_it);
+      }
+      ++param_it;
+    }
+    break;
+  }
+  case sql::ObWhiteFilterObjSetCmpType::BINARY_SEARCH: {
+    is_binary_search = filter.is_obj_array_sorted();
+  }
+  case sql::ObWhiteFilterObjSetCmpType::HASH_SEARCH: {
+    ObDictDecoderIterator &dict_it = left_it;
+    int64_t dict_ref = dict_it - begin_it;
+    bool is_exist = false;
+    while (OB_SUCC(ret) && dict_it != right_it) {
+      const ObObj& cur_obj = *dict_it;
+      if (OB_UNLIKELY((cur_obj.is_null_oracle() && lib::is_oracle_mode())
+                      || (cur_obj.is_null() && lib::is_mysql_mode()))) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("There should not be null object in dictionary", K(ret));
+      } else if (is_binary_search) {
+        if (OB_FAIL(filter.exist_in_obj_array(cur_obj, is_exist))) {
+          LOG_WARN("Failed to check object in obj array", K(ret), K(cur_obj));
+        }
+      } else {
+        if (OB_FAIL(filter.exist_in_obj_set(cur_obj, is_exist))) {
+          LOG_WARN("Failed to check object in obj set", K(ret), K(cur_obj));
+        }
+      }
+      if (OB_SUCC(ret) && is_exist) {
+        found = true;
+        ref_bitset.set(dict_ref);
+      }
+      ++dict_it;
+      ++dict_ref;
+    }
+    break;
+  }
+  default: {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("Unexpected obj set cmp type", K(ret), K(cmp_type));
+    break;
+  }
   }
   return ret;
 }

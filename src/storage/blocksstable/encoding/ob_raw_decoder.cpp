@@ -852,7 +852,7 @@ int ObRawDecoder::in_operator(
                       const sql::ObWhiteFilterExecutor &filter,
                       bool &result) -> int {
                       int ret = OB_SUCCESS;
-                      if (OB_FAIL(filter.exist_in_obj_set(cur_obj, result))) {
+                      if (OB_FAIL(filter.exist_in_objs(cur_obj, result))) {
                         LOG_WARN("Failed to check object in obj set", K(ret), K(cur_obj));
                       }
                       return ret;

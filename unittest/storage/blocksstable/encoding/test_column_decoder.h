@@ -339,7 +339,6 @@ int TestColumnDecoder::test_filter_pushdown(
   // procedure like ObWhiteFilterExecutor::init_evaluated_datums
   filter.params_ = objs;
   if (sql::WHITE_OP_IN == filter.get_op_type()) {
-    filter.set_obj_set_type();
     filter.init_obj_set();
   }
   filter.init_min_max_param_idx();
