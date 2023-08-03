@@ -270,6 +270,7 @@ int ObRLEDecoder::comparison_operator(
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() != 1
+                  || filter.get_op_type() > sql::WHITE_OP_NE
                   || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Invalid argument for comparison operator", K(ret),
@@ -317,7 +318,8 @@ int ObRLEDecoder::bt_operator(
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                 || filter.get_objs().count() != 2
-                || filter.get_op_type() != sql::WHITE_OP_BT)) {
+                || filter.get_op_type() != sql::WHITE_OP_BT
+                || filter.null_param_contained())) {
       ret = OB_INVALID_ARGUMENT;
       LOG_WARN("Invalid argument for BT operator",
           K(ret), K(result_bitmap.size()), K(filter.get_objs()));
@@ -360,8 +362,9 @@ int ObRLEDecoder::in_operator(
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(result_bitmap.size() != col_ctx.micro_block_header_->row_count_
                   || filter.get_objs().count() == 0
-                  || filter.get_op_type() != sql::WHITE_OP_IN)) {
-    LOG_WARN("Invalid argument for BT operator", K(ret),
+                  || filter.get_op_type() != sql::WHITE_OP_IN
+                  || filter.null_param_contained())) {
+    LOG_WARN("Invalid argument for IN operator", K(ret),
              K(result_bitmap.size()), K(filter));
   } else {
     const int64_t dict_count = dict_decoder_.get_dict_header()->count_;

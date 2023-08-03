@@ -336,9 +336,11 @@ int ObIntegerBaseDiffDecoder::comparison_operator(
   int ret = OB_SUCCESS;
   uint64_t delta_value = 0;
   uint64_t param_delta_value = 0;
-  if (OB_UNLIKELY(col_ctx.micro_block_header_->row_count_ != result_bitmap.size()
-                          || NULL == col_data
-                          || filter.get_objs().count() != 1)) {
+  if (OB_UNLIKELY(NULL == col_data
+                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_ 
+                  || filter.get_objs().count() != 1
+                  || filter.get_op_type() > sql::WHITE_OP_NE
+                  || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Filter Pushdown Operator: Invalid argument", K(ret), K(col_ctx));
   } else if (OB_UNLIKELY(col_ctx.obj_meta_.get_type() != filter.get_objs().at(0).get_type())) {
@@ -450,9 +452,11 @@ int ObIntegerBaseDiffDecoder::bt_operator(
     ObBitmap &result_bitmap) const
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(col_ctx.micro_block_header_->row_count_ != result_bitmap.size()
-                          || NULL == col_data
-                          || filter.get_objs().count() != 2)) {
+  if (OB_UNLIKELY(NULL == col_data
+                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_
+                  || filter.get_objs().count() != 2
+                  || filter.get_op_type() != sql::WHITE_OP_BT
+                  || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Filter pushdown operator: Invalid argument", K(ret), K(col_ctx));
   } else if (col_ctx.obj_meta_.get_type_class() == ObFloatTC
@@ -497,8 +501,11 @@ int ObIntegerBaseDiffDecoder::in_operator(
     ObBitmap &result_bitmap) const
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(filter.get_objs().count() == 0
-                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_)) {
+  if (OB_UNLIKELY(NULL == col_data
+                  || result_bitmap.size() != col_ctx.micro_block_header_->row_count_
+                  || filter.get_objs().count() == 0
+                  || filter.get_op_type() != sql::WHITE_OP_IN
+                  || filter.null_param_contained())) {
     ret = OB_INVALID_ARGUMENT;
     LOG_WARN("Pushdown in operator: Invalid arguments");
   } else if (OB_FAIL(traverse_all_data(parent, col_ctx, col_data, filter, result_bitmap,
