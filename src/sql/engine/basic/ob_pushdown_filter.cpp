@@ -967,15 +967,11 @@ int ObWhiteFilterExecutor::init_evaluated_datums()
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null expr", K(ret));
   } else {
-    // reset obj_set_type_ to default
-    obj_set_type_ = ObWhiteFilterObjSetType::DEFAULT_ARRAY;
     // load objs from datum
     if (WHITE_OP_IN == filter_.get_op_type()) {
       // fill params_ for WHITE_OP_IN
       if (OB_FAIL(eval_in_right_val_to_objs())) {
         LOG_WARN("Failed to eval right values to obj array for WHITE_OP_IN", K(ret));
-      } else if (OB_FAIL(set_obj_set_type())) {
-        LOG_WARN("Failed to set Object set type", K(ret), K(obj_set_type_));
       } else if (OB_FAIL(init_obj_set())) {
         LOG_WARN("Failed to init Object set in filter node", K(ret));
       }
@@ -1090,117 +1086,118 @@ void ObWhiteFilterExecutor::check_null_params()
   return;
 }
 
-int ObWhiteFilterExecutor::set_obj_set_type()
-{
-  // thresholds to decide which ObWhiteFilterObjSetType to use
-  static constexpr uint32_t OBJ_SET_THRESHOLD_SORTED_ARRAY = 5;
-  static constexpr uint32_t OBJ_SET_THRESHOLD_HASH_SET = 20;
-
-  // condition 1: op_type is WHITE_OP_IN
-  // condition 2.1: params count < OBJ_SET_THRESHOLD_SORTED_ARRAY : use DEFAULT_ARRAY
-  // condition 2.2: params count >= OBJ_SET_THRESHOLD_SORTED_ARRAY and < OBJ_SET_THRESHOLD_HASH_SET : use SORTED_ARRAY
-  // condition 2.3: params count >= OBJ_SET_THRESHOLD_HASH_SET : use HASH_SET
-  int ret = OB_SUCCESS;
-  uint32_t params_count = params_.count();
-  if (OBJ_SET_THRESHOLD_SORTED_ARRAY >= OBJ_SET_THRESHOLD_HASH_SET) {
-    ret = OB_INVALID_ARGUMENT;
-    LOG_WARN("Invalid THRESHOLD value SORTED_ARRAY >= HASH_SET", K(ret),
-             K(OBJ_SET_THRESHOLD_SORTED_ARRAY), K(OBJ_SET_THRESHOLD_HASH_SET));
-  } else {
-    if (params_count < OBJ_SET_THRESHOLD_SORTED_ARRAY) {
-      obj_set_type_ = ObWhiteFilterObjSetType::DEFAULT_ARRAY;
-    } else if (params_count < OBJ_SET_THRESHOLD_HASH_SET) {
-      obj_set_type_ = ObWhiteFilterObjSetType::SORTED_ARRAY;
-    } else {
-      obj_set_type_ = ObWhiteFilterObjSetType::HASH_SET;
-    }
-  }
-  return ret;
-}
-
 int ObWhiteFilterExecutor::init_obj_set()
 {
   int ret = OB_SUCCESS;
-  switch (obj_set_type_) {
-  case ObWhiteFilterObjSetType::HASH_SET: {
-    if (param_set_.created()) {
-      param_set_.destroy();
-    }
-    if (OB_FAIL(param_set_.create(params_.count() * 2))) {
-      LOG_WARN("Failed to create hash set", K(ret));
-    }
-    for (int i = 0; OB_SUCC(ret) && i < params_.count(); ++i) {
-      if (OB_FAIL(param_set_.set_refactored(params_.at(i)))) {
-        if (OB_UNLIKELY(ret != OB_HASH_EXIST)) {
-          LOG_WARN("Failed to insert object into hashset", K(ret));
-        } else {
-          ret = OB_SUCCESS;
-        }
+  obj_array_sorted_ = false;
+  // 1. create obj hashset
+  if (param_set_.created()) {
+    param_set_.destroy();
+  }
+  if (OB_FAIL(param_set_.create(params_.count() * 2))) {
+    LOG_WARN("Failed to create hash set", K(ret));
+  }
+  for (int i = 0; OB_SUCC(ret) && i < params_.count(); ++i) {
+    if (OB_FAIL(param_set_.set_refactored(params_.at(i)))) {
+      if (OB_UNLIKELY(ret != OB_HASH_EXIST)) {
+        LOG_WARN("Failed to insert object into hashset", K(ret));
+      } else {
+        ret = OB_SUCCESS;
       }
     }
-    break;
   }
-  case ObWhiteFilterObjSetType::SORTED_ARRAY: {
+  // 2. make params sorted
+  if (OB_FAIL(ret)) {
+  } else {
     std::sort(params_.begin(), params_.end(), param_cmp_less);
-    break;
-  }
-  default:
-    break;
+    obj_array_sorted_ = true;
   }
   return ret;
 }
 
 int ObWhiteFilterExecutor::exist_in_obj_set(const ObObj &obj, bool &is_exist) const
 {
-  int ret = OB_SUCCESS;
-  bool min_max_valid = (min_param_idx_ != UINT64_MAX) && (max_param_idx_ != UINT64_MAX);
-  switch (obj_set_type_) {
-  case ObWhiteFilterObjSetType::DEFAULT_ARRAY: {
-    if (min_max_valid && (obj < params_.at(min_param_idx_) || obj > params_.at(max_param_idx_))) {
-      is_exist = false;
-    } else {
-      is_exist = false;
-      for (ParamArrayConstIter it = params_.begin(); !is_exist && it != params_.end(); ++it) {
-        if (*it == obj) {
-          is_exist = true;
-        }
-      }
-    }
-    break;
-  }
-  case ObWhiteFilterObjSetType::HASH_SET: {
-    if (!param_set_.created()) {
-      LOG_WARN("param set not created", K(ret));
-    } else {
-      ret = param_set_.exist_refactored(obj);
-      if (OB_HASH_EXIST == ret) {
-        ret = OB_SUCCESS;
-        is_exist = true;
-      } else if (OB_HASH_NOT_EXIST == ret) {
-        ret = OB_SUCCESS;
-        is_exist = false;
-      } else {
-        LOG_WARN("Failed to search in obj_set in pushed down filter node", K(ret), K(obj));
-      }
-    }
-    break;
-  }
-  case ObWhiteFilterObjSetType::SORTED_ARRAY: {
-    if (min_max_valid && (obj < params_.at(min_param_idx_) || obj > params_.at(max_param_idx_))) {
-      // obj greater than max_obj || obj less than min_obj
-      is_exist = false;
-    } else {
-      is_exist = std::binary_search(params_.begin(), params_.end(), obj, param_cmp_less);
-    }
-    break;
-  }
-  default: {
-    ret = OB_ERR_UNEXPECTED;
-    LOG_WARN("Unexpected obj set type", K(ret), K(obj_set_type_));
-    break;
-  }
+  int ret = param_set_.exist_refactored(obj);;
+  if (OB_HASH_EXIST == ret) {
+    ret = OB_SUCCESS;
+    is_exist = true;
+  } else if (OB_HASH_NOT_EXIST == ret) {
+    ret = OB_SUCCESS;
+    is_exist = false;
+  } else {
+    LOG_WARN("Failed to search in obj_set in pushed down filter node", K(ret), K(obj));
   }
   return ret;
+}
+
+int ObWhiteFilterExecutor::exist_in_obj_array(const ObObj &obj, bool &is_exist) const
+{
+  int ret = OB_SUCCESS;
+  if (min_max_valid_ && (obj < params_.at(min_param_idx_) || obj > params_.at(max_param_idx_))) {
+    // obj greater than max_obj || obj less than min_obj
+    is_exist = false;
+  } else {
+    is_exist = std::binary_search(params_.begin(), params_.end(), obj, param_cmp_less);
+  }
+  return ret;
+}
+
+int ObWhiteFilterExecutor::exist_in_objs(const ObObj &obj, bool &is_exist) const
+{
+  int ret = OB_SUCCESS;
+  if (obj_array_sorted_ && params_.count() > 64) {
+    ret = exist_in_obj_array(obj, is_exist);
+  } else {
+    ret = exist_in_obj_set(obj, is_exist);
+  }
+  return ret;
+}
+
+ObWhiteFilterObjSetCmpType ObWhiteFilterExecutor::get_obj_set_cmp_type(const int64_t len_dict, bool is_sorted_dict) const {
+  // delta in [-1, 1]
+  // delta [-1, -0.5)   means b > 3*a
+  // delta [-0.5, 0.5]  means b <= 3*a and a <= 3*b
+  // delta (0.5, 1]     means a > 3*b
+  static constexpr double DELTA_THRES = 0.5;
+  static constexpr int64_t HASH_SLOTS = 16;
+
+  sql::ObWhiteFilterObjSetCmpType cmp_type = ObWhiteFilterObjSetCmpType::HASH_SEARCH;
+  const int64_t len_objs = params_.count();
+  double delta = static_cast<double>(len_dict - len_objs) /
+                 static_cast<double>(len_dict + len_objs);
+  if (is_sorted_dict) {
+    if (delta > DELTA_THRES) {
+      // a >> b
+      if (len_dict > HASH_SLOTS * 4) {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::BINARY_SEARCH_DICT;
+      } else {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::DUAL_POINTER;
+      }
+    } else if (delta >= -DELTA_THRES) {
+      // a ~~ b
+      if (len_dict > HASH_SLOTS) {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::DUAL_POINTER;
+      } else {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::HASH_SEARCH;
+      }
+    } else {
+      // a << b
+      if (len_objs > HASH_SLOTS * 4) {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::BINARY_SEARCH;
+      } else if (len_objs > HASH_SLOTS * 3) {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::DUAL_POINTER;
+      } else {
+        cmp_type = sql::ObWhiteFilterObjSetCmpType::HASH_SEARCH;
+      }
+    }
+  } else {
+    if (len_objs > HASH_SLOTS * 4) {
+      cmp_type = sql::ObWhiteFilterObjSetCmpType::BINARY_SEARCH;
+    } else {
+      cmp_type = sql::ObWhiteFilterObjSetCmpType::HASH_SEARCH;
+    }
+  }
+  return cmp_type;
 }
 
 // set min/max param's index to optimize
@@ -1210,19 +1207,21 @@ int ObWhiteFilterExecutor::init_min_max_param_idx()
   // reset min/max param idx to default
   max_param_idx_ = UINT64_MAX;
   min_param_idx_ = UINT64_MAX;
+  min_max_valid_ = false;
   // if params_ sorted, get min/max directly
   // else travel params_ to find min/max
-  if (params_.count() > 0) {
-    if (ObWhiteFilterObjSetType::SORTED_ARRAY == obj_set_type_) {
+  if (OB_LIKELY(params_.count() > 0)) {
+    if (obj_array_sorted_) {
       min_param_idx_ = 0;
       max_param_idx_ = params_.count() - 1;
     } else {
       uint64_t cur_idx = 0;
       for (ParamArrayIter it = params_.begin(); it != params_.end(); ++it) {
-        if (min_param_idx_ == UINT64_MAX || *it < params_.at(min_param_idx_)) {
+        ObObj& cur_obj = *it;
+        if (min_param_idx_ == UINT64_MAX || cur_obj < params_.at(min_param_idx_)) {
           min_param_idx_ = cur_idx;
         }
-        if (max_param_idx_ == UINT64_MAX || *it > params_.at(max_param_idx_)) {
+        if (max_param_idx_ == UINT64_MAX || cur_obj > params_.at(max_param_idx_)) {
           max_param_idx_ = cur_idx;
         }
         ++cur_idx;
@@ -1231,7 +1230,9 @@ int ObWhiteFilterExecutor::init_min_max_param_idx()
     // check min/max idx
     if (min_param_idx_ == UINT64_MAX || max_param_idx_ == UINT64_MAX) {
       ret = OB_ERR_UNEXPECTED;
-      LOG_WARN("Failed to get min/max param index value", K(ret), K(obj_set_type_), K(params_.count()));
+      LOG_WARN("Failed to get min/max param index value", K(ret), K(obj_array_sorted_), K(params_.count()));
+    } else {
+      min_max_valid_ = true;
     }
   }
   return ret;

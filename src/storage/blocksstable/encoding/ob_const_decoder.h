@@ -116,12 +116,15 @@ private:
       const bool flag,
       ObBitmap &result_bitmap) const;
 
-  int set_ref_exist_in_ordered_obj_array(
-    const ObDictDecoderIterator &dict_begin,
-    const ObDictDecoderIterator &dict_end,
-    const ObFixedArray<ObObj, ObIAllocator> &sorted_obj_array,
-    sql::ObBitVector &ref_bitset,
-    bool &found) const;
+  int set_ref_exist_in_objs(
+      ObDictDecoderIterator &left_it,
+      ObDictDecoderIterator &right_it,
+      const ObDictDecoderIterator &begin_it,
+      bool is_sorted_dict,
+      const sql::ObWhiteFilterExecutor &filter,
+      sql::ObBitVector &ref_bitset,
+      bool &found,
+      bool const_in_result_set) const;
 
   int extract_ref_and_null_count(
       const int64_t *row_ids,

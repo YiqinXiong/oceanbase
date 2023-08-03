@@ -187,13 +187,15 @@ private:
       const unsigned char *col_data,
       const sql::ObBitVector *ref_bitset,
       ObBitmap &result_bitmap) const;
-  
-  int set_ref_exist_in_ordered_obj_array(
-    const ObDictDecoderIterator &dict_begin,
-    const ObDictDecoderIterator &dict_end,
-    const ObFixedArray<ObObj, ObIAllocator> &sorted_obj_array,
-    sql::ObBitVector &ref_bitset,
-    bool &found) const;
+
+  int set_ref_exist_in_objs(
+      ObDictDecoderIterator &left_it,
+      ObDictDecoderIterator &right_it,
+      const ObDictDecoderIterator &begin_it,
+      bool is_sorted_dict,
+      const sql::ObWhiteFilterExecutor &filter,
+      sql::ObBitVector &ref_bitset,
+      bool &found) const;
 
   OB_INLINE int read_ref(
       const int64_t row_id,
