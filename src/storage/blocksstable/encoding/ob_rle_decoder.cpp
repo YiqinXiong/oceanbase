@@ -373,9 +373,10 @@ int ObRLEDecoder::in_operator(
     } else if (dict_meta_header->count_ > 0) {
       const int64_t dict_meta_length = col_ctx.col_header_->length_ - meta_header_->offset_;
       // iterators
-      ObDictDecoderIterator traverse_it;
       const ObDictDecoderIterator begin_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
       const ObDictDecoderIterator end_it = dict_decoder_.end(&col_ctx, dict_meta_length);
+      ObDictDecoderIterator left_it = begin_it;
+      ObDictDecoderIterator right_it = end_it;
       // init ref_bitset
       const int64_t ref_bitset_size = dict_meta_header->count_ + 1;
       char ref_bitset_buf[sql::ObBitVector::memory_size(ref_bitset_size)];
@@ -385,6 +386,8 @@ int ObRLEDecoder::in_operator(
       bool found = false;
       int64_t dict_ref = 0;
       bool is_exist = false;
+      bool is_no_need_traverse = false;
+
       if (dict_meta_header->is_sorted_dict()) {
         // Sorted dictionary, binary search here to find boundary element
         const ObObj &first_dict = *(dict_decoder_.begin(&col_ctx, dict_meta_length));
@@ -392,41 +395,31 @@ int ObRLEDecoder::in_operator(
         const ObObj &min_param = filter.get_min_param();
         const ObObj &max_param = filter.get_max_param();
         if (last_dict < min_param || first_dict > max_param) {
+          is_no_need_traverse = true;
           LOG_DEBUG("Hit shortcut, no cross, return all-false bitmap", K(first_dict), K(last_dict));
-        } else if (filter.is_obj_array_sorted()) {
+        } else if (sql::ObWhiteFilterObjSetType::SORTED_ARRAY == filter.get_obj_set_type()) {
           // use sorted obj array, i.e. params_
           if (OB_FAIL(set_ref_exist_in_ordered_obj_array(begin_it, end_it, filter.get_objs(), *ref_bitset, found))) {
             LOG_WARN("Failed to check object in sorted array", K(ret));
           }
+          is_no_need_traverse = true;
         } else {
-          // use obj hashset
-          ObDictDecoderIterator left_bound_inclusive = std::lower_bound(begin_it, end_it, min_param);
-          ObDictDecoderIterator right_bound_exclusive = std::upper_bound(begin_it, end_it, max_param);
-          traverse_it = left_bound_inclusive;
-          dict_ref = left_bound_inclusive - begin_it;
-          while (OB_SUCC(ret) && traverse_it != right_bound_exclusive) {
-            if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
-              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
-            } else if (is_exist) {
-              found = true;
-              ref_bitset->set(dict_ref);
-            }
-            ++traverse_it;
-            ++dict_ref;
-          }
+          // use other type of obj set
+          left_it = std::lower_bound(begin_it, end_it, min_param);
+          right_it = std::upper_bound(begin_it, end_it, max_param);
         }
-      } else {
-        // Unsorted dictionary, Traverse dictionary
-        traverse_it = dict_decoder_.begin(&col_ctx, dict_meta_length);
-        while (OB_SUCC(ret) && traverse_it != end_it) {
-          if (filter.is_in_params_range(*traverse_it)) {
-            // fast pass element which is not in params
-            if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
-              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
-            } else if (is_exist) {
-              found = true;
-              ref_bitset->set(dict_ref);
-            }
+      }
+
+      if (!is_no_need_traverse) {
+        ObDictDecoderIterator traverse_it = left_it;
+        int64_t dict_ref = left_it - begin_it;
+        while (OB_SUCC(ret) && traverse_it != right_it) {
+          const ObObj& cur_obj = *traverse_it;
+          if (OB_FAIL(filter.exist_in_obj_set(cur_obj, is_exist))) {
+            LOG_WARN("Failed to check object in obj set", K(ret), K(cur_obj));
+          } else if (is_exist) {
+            found = true;
+            ref_bitset->set(dict_ref);
           }
           ++traverse_it;
           ++dict_ref;
@@ -516,16 +509,18 @@ int ObRLEDecoder::set_ref_exist_in_ordered_obj_array(
   auto param_it = sorted_obj_array.begin();
   // dual pointer to find cross item
   while (dict_it != dict_end && param_it != sorted_obj_array.end()) {
-    if (*dict_it < *param_it) {
-      dict_it = std::lower_bound(dict_it, dict_end, *param_it);
-    } else if (*dict_it > *param_it) {
-      param_it = std::lower_bound(param_it, sorted_obj_array.end(), *dict_it);
-    } else {
+    const ObObj& dict_obj = *dict_it;
+    const ObObj& param_obj = *param_it;
+    if (dict_obj == param_obj) {
       // *dict_it == *param_it, current ref = dict_it - dict_begin
       found = true;
       ref_bitset.set(dict_it - dict_begin);
-      dict_it = std::upper_bound(dict_it, dict_end, *dict_it);
-      param_it = std::upper_bound(param_it, sorted_obj_array.end(), *param_it);
+      dict_it = std::upper_bound(dict_it, dict_end, dict_obj);
+      param_it = std::upper_bound(param_it, sorted_obj_array.end(), param_obj);
+    } else if (dict_obj > param_obj) {
+      param_it = std::lower_bound(param_it, sorted_obj_array.end(), dict_obj);
+    } else {
+      dict_it = std::lower_bound(dict_it, dict_end, param_obj);
     }
   }
   return ret;
