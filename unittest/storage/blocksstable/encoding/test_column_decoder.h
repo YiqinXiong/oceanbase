@@ -336,10 +336,15 @@ int TestColumnDecoder::test_filter_pushdown(
   pd_filter_info.col_capacity_ = full_column_cnt_;
   pd_filter_info.start_ = 0;
   pd_filter_info.end_ = decoder.row_count_;
+  // procedure like ObWhiteFilterExecutor::init_evaluated_datums
+  filter.params_sorted_ = false;
+  filter.params_need_sort_ = objs.count() > 0 && objs.count() < filter.SORT_ARRAY_THRESHOLD;
+  // filter.params_need_sort_ = false;
   filter.params_ = objs;
   if (sql::WHITE_OP_IN == filter.get_op_type()) {
     filter.init_obj_set();
   }
+  filter.init_min_max_param_idx();
 
   if (is_retro) {
     ret = decoder.filter_pushdown_retro(nullptr, filter, pd_filter_info, col_idx, filter.col_params_.at(0), pd_filter_info.col_buf_[0], result_bitmap);

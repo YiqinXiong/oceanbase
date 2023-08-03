@@ -15,6 +15,7 @@
 
 #include "lib/container/ob_bitmap.h"
 #include "lib/container/ob_fixed_array.h"
+#include "lib/container/ob_fixed_array_iterator.h"
 #include "lib/hash/ob_hashset.h"
 #include "common/object/ob_obj_compare.h"
 #include "share/datum/ob_datum.h"
@@ -49,6 +50,9 @@ class ObStaticEngineCG;
 class ObPushdownOperator;
 struct ObExprFrameInfo;
 typedef common::ObFixedArray<const share::schema::ObColumnParam*, common::ObIAllocator> ColumnParamFixedArray;
+typedef common::ObFixedArray<common::ObObj, common::ObIAllocator> ParamSortedArray;
+typedef ParamSortedArray::iterator ParamSortedArrayIter;
+typedef ParamSortedArray::const_iterator ParamSortedArrayConstIter;
 
 enum PushdownFilterType
 {
@@ -437,8 +441,12 @@ public:
                         ObPushdownOperator &op)
       : ObPushdownFilterExecutor(alloc, op,
                                  PushdownExecutorType::WHITE_FILTER_EXECUTOR),
-        null_param_contained_(false), params_(alloc),
-        min_param_idx_(UINT64_MAX), max_param_idx_(UINT64_MAX),
+        null_param_contained_(false), 
+        params_(alloc), 
+        params_need_sort_(false),
+        params_sorted_(false),
+        min_param_idx_(UINT64_MAX),
+        max_param_idx_(UINT64_MAX),
         filter_(filter) {}
   ~ObWhiteFilterExecutor()
   {
@@ -452,15 +460,20 @@ public:
   OB_INLINE virtual common::ObIArray<uint64_t> &get_col_ids() override
   { return filter_.get_col_ids(); }
   virtual int init_evaluated_datums() override;
-  OB_INLINE const common::ObIArray<common::ObObj> &get_objs() const
+  OB_INLINE const ParamSortedArray &get_objs() const
   { return params_; }
   OB_INLINE bool null_param_contained() const { return null_param_contained_; }
   int exist_in_obj_set(const common::ObObj &obj, bool &is_exist) const;
   bool is_obj_set_created() const { return param_set_.created(); };
+  bool is_obj_array_sorted() const { return params_sorted_; };
   OB_INLINE const ObObj &get_min_param() const { return params_.at(min_param_idx_); };
   OB_INLINE const ObObj &get_max_param() const { return params_.at(max_param_idx_); };
-  OB_INLINE bool is_in_params(const ObObj& obj) const 
-  { return (obj <= params_.at(max_param_idx_)) && (obj >= params_.at(min_param_idx_)); };
+  OB_INLINE bool is_in_params_range(const ObObj &obj) const
+  {
+    return min_param_idx_ == UINT64_MAX || max_param_idx_ == UINT64_MAX ||
+           ((obj >= params_.at(min_param_idx_)) &&
+            (obj <= params_.at(max_param_idx_)));
+  };
   OB_INLINE ObWhiteFilterOperatorType get_op_type() const
   { return filter_.get_op_type(); }
   INHERIT_TO_STRING_KV("ObPushdownWhiteFilterExecutor", ObPushdownFilterExecutor,
@@ -470,14 +483,21 @@ private:
   int eval_in_right_val_to_objs();
   int eval_right_val_to_objs();
   void check_null_params();
+  void check_params_need_sort();
   int init_obj_set();
+  int init_min_max_param_idx();
+  static bool param_cmp_less(const ObObj &a, const ObObj &b) { return a < b; };
 private:
   bool null_param_contained_;
-  common::ObFixedArray<common::ObObj, common::ObIAllocator> params_;
+  ParamSortedArray params_;
+  bool params_need_sort_;
+  bool params_sorted_;
   uint64_t min_param_idx_;
   uint64_t max_param_idx_;
   common::hash::ObHashSet<common::ObObj> param_set_;
   ObPushdownWhiteFilterNode &filter_;
+  // use sorted array, if params' count is less than the threshold
+  static constexpr uint32_t SORT_ARRAY_THRESHOLD = 10;
 };
 
 class ObAndFilterExecutor : public ObPushdownFilterExecutor

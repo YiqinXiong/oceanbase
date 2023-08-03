@@ -966,10 +966,8 @@ int ObWhiteFilterExecutor::init_evaluated_datums()
   if (OB_ISNULL(filter_.expr_)) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("Unexpected null expr", K(ret));
+  } else if (OB_FALSE_IT(check_params_need_sort())) {
   } else {
-    // reset min/max param idx to default
-    max_param_idx_ = UINT64_MAX;
-    min_param_idx_ = UINT64_MAX;
     // load objs from datum
     if (WHITE_OP_IN == filter_.get_op_type()) {
       // fill params_ for WHITE_OP_IN
@@ -984,7 +982,13 @@ int ObWhiteFilterExecutor::init_evaluated_datums()
                  K(filter_.get_op_type()));
       }
     }
-    LOG_DEBUG("[PUSHDOWN], white pushdown filter inited params", K(params_));
+    // init min/max param idx
+    if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(init_min_max_param_idx())) {
+      LOG_WARN("Failed to init min/max param idx to optimize", K(ret));
+    } else {
+      LOG_DEBUG("[PUSHDOWN], white pushdown filter inited params", K(params_));
+    }
   }
   return ret;
 }
@@ -1003,7 +1007,8 @@ int ObWhiteFilterExecutor::eval_right_val_to_objs()
     ObDatum *datum = NULL;
     null_param_contained_ = false;
     // fill params_ for other WHITE_OP_XX
-    for (int64_t i = 0; OB_SUCC(ret) && i < expr.arg_cnt_; i++) {
+    ObObj param;
+    for (int64_t i = 0; OB_SUCC(ret) && i < expr.arg_cnt_; ++i) {
       const ObExpr *cur_arg = expr.args_[i];
       if (OB_ISNULL(cur_arg)) {
         ret = OB_ERR_UNEXPECTED;
@@ -1012,7 +1017,6 @@ int ObWhiteFilterExecutor::eval_right_val_to_objs()
         // skip column reference expr
         continue;
       } else {
-        ObObj param;  // TODO: move it out of loop
         if (OB_FAIL(cur_arg->eval(ctx, datum))) {
           LOG_WARN("evaluate filter arg expr failed", K(ret), K(i));
         } else if (OB_FAIL(datum->to_obj(param, cur_arg->obj_meta_, cur_arg->obj_datum_map_))) {
@@ -1021,15 +1025,6 @@ int ObWhiteFilterExecutor::eval_right_val_to_objs()
           null_param_contained_ = true;
         } else if (OB_FAIL(params_.push_back(param))) {
           LOG_WARN("Failed to push back param", K(ret));
-        } else {
-          // set min/max param's index to optimize
-          uint64_t cur_idx = params_.count() - 1;
-          if (min_param_idx_ == UINT64_MAX || param < params_.at(min_param_idx_)) {
-            min_param_idx_ = cur_idx;
-          }
-          if (max_param_idx_ == UINT64_MAX || param > params_.at(max_param_idx_)) {
-            max_param_idx_ = cur_idx;
-          }
         }
       }
     }
@@ -1059,8 +1054,8 @@ int ObWhiteFilterExecutor::eval_in_right_val_to_objs()
     } else {
       // for each param of WHITE_OP_IN
       // get right datum, transform to obj, append to params_
-      for (int i = 0; OB_SUCC(ret) && i < expr.inner_func_cnt_; i++) {
-        ObObj param;    // TODO: move it out of loop
+      ObObj param;
+      for (int i = 0; OB_SUCC(ret) && i < expr.inner_func_cnt_; ++i) {
         const ObExpr *cur_arg = expr.args_[1]->args_[i];
         if (OB_ISNULL(cur_arg)) {
           ret = OB_INVALID_ARGUMENT;
@@ -1073,15 +1068,6 @@ int ObWhiteFilterExecutor::eval_in_right_val_to_objs()
           LOG_WARN("convert datum to obj failed", K(ret));
         } else if (OB_FAIL(params_.push_back(param))) {
           LOG_WARN("Failed to push back param", K(ret));
-        } else {
-          // set min/max param's index to optimize
-          uint64_t cur_idx = params_.count() - 1;
-          if (min_param_idx_ == UINT64_MAX || param < params_.at(min_param_idx_)) {
-            min_param_idx_ = cur_idx;
-          }
-          if (max_param_idx_ == UINT64_MAX || param > params_.at(max_param_idx_)) {
-            max_param_idx_ = cur_idx;
-          }
         }
       }
     }
@@ -1101,21 +1087,40 @@ void ObWhiteFilterExecutor::check_null_params()
   return;
 }
 
+void ObWhiteFilterExecutor::check_params_need_sort()
+{
+  params_sorted_ = false;
+  params_need_sort_ = false;
+  // condition 1: op_type is WHITE_OP_IN
+  // condition 2: params' count is greater than 0, and less than SORT_ARRAY_THRESHOLD 
+  if (WHITE_OP_IN == filter_.get_op_type()) {
+    params_need_sort_ = filter_.expr_->inner_func_cnt_ > 0 && filter_.expr_->inner_func_cnt_ < SORT_ARRAY_THRESHOLD;
+  }
+  return;
+}
+
 int ObWhiteFilterExecutor::init_obj_set()
 {
   int ret = OB_SUCCESS;
-  if (param_set_.created()) {
-    param_set_.destroy();
-  }
-  if (OB_FAIL(param_set_.create(params_.count() * 2))) {
-    LOG_WARN("Failed to create hash set", K(ret));
-  }
-  for (int i = 0; OB_SUCC(ret) && i < params_.count(); ++i) {
-    if (OB_FAIL(param_set_.set_refactored(params_.at(i)))) {
-      if (OB_UNLIKELY(ret != OB_HASH_EXIST)) {
-        LOG_WARN("Failed to insert object into hashset", K(ret));
-      } else {
-        ret = OB_SUCCESS;
+  if (params_need_sort_) {
+    // obj_set as sorted array
+    std::sort(params_.begin(), params_.end(), param_cmp_less);
+    params_sorted_ = true;
+  } else {
+    // obj_set as hashset
+    if (param_set_.created()) {
+      param_set_.destroy();
+    }
+    if (OB_FAIL(param_set_.create(params_.count() * 2))) {
+      LOG_WARN("Failed to create hash set", K(ret));
+    }
+    for (int i = 0; OB_SUCC(ret) && i < params_.count(); ++i) {
+      if (OB_FAIL(param_set_.set_refactored(params_.at(i)))) {
+        if (OB_UNLIKELY(ret != OB_HASH_EXIST)) {
+          LOG_WARN("Failed to insert object into hashset", K(ret));
+        } else {
+          ret = OB_SUCCESS;
+        }
       }
     }
   }
@@ -1124,15 +1129,56 @@ int ObWhiteFilterExecutor::init_obj_set()
 
 int ObWhiteFilterExecutor::exist_in_obj_set(const ObObj &obj, bool &is_exist) const
 {
-  int ret = param_set_.exist_refactored(obj);
-  if (OB_HASH_EXIST == ret) {
-    ret = OB_SUCCESS;
-    is_exist = true;
-  } else if (OB_HASH_NOT_EXIST == ret) {
-    ret = OB_SUCCESS;
-    is_exist = false;
+  int ret = OB_SUCCESS;
+  if (params_sorted_) {
+    // obj_set as sorted array
+    is_exist = std::binary_search(params_.begin(), params_.end(), obj, param_cmp_less);
   } else {
-    LOG_WARN("Failed to search in obj_set in pushed down filter node", K(ret), K(obj));
+    // obj_set as hashset
+    ret = param_set_.exist_refactored(obj);
+    if (OB_HASH_EXIST == ret) {
+      ret = OB_SUCCESS;
+      is_exist = true;
+    } else if (OB_HASH_NOT_EXIST == ret) {
+      ret = OB_SUCCESS;
+      is_exist = false;
+    } else {
+      LOG_WARN("Failed to search in obj_set in pushed down filter node", K(ret), K(obj));
+    }
+  }
+  return ret;
+}
+
+// set min/max param's index to optimize
+int ObWhiteFilterExecutor::init_min_max_param_idx()
+{
+  int ret = OB_SUCCESS;
+  // reset min/max param idx to default
+  max_param_idx_ = UINT64_MAX;
+  min_param_idx_ = UINT64_MAX;
+  // if params_ sorted, get min/max directly
+  // else travel params_ to find min/max
+  if (params_.count() > 0) {
+    if (params_sorted_) {
+      min_param_idx_ = 0;
+      max_param_idx_ = params_.count() - 1;
+    } else {
+      uint64_t cur_idx = 0;
+      for (ParamSortedArrayIter it = params_.begin(); it != params_.end(); ++it) {
+        if (min_param_idx_ == UINT64_MAX || *it < params_.at(min_param_idx_)) {
+          min_param_idx_ = cur_idx;
+        }
+        if (max_param_idx_ == UINT64_MAX || *it > params_.at(max_param_idx_)) {
+          max_param_idx_ = cur_idx;
+        }
+        ++cur_idx;
+      }
+    }
+    // check min/max idx
+    if (min_param_idx_ == UINT64_MAX || max_param_idx_ == UINT64_MAX) {
+      ret = OB_ERR_UNEXPECTED;
+      LOG_WARN("Failed to get min/max param index value", K(ret), K(params_sorted_), K(params_.count()));
+    }
   }
   return ret;
 }
