@@ -435,8 +435,11 @@ public:
   ObWhiteFilterExecutor(common::ObIAllocator &alloc,
                         ObPushdownWhiteFilterNode &filter,
                         ObPushdownOperator &op)
-      : ObPushdownFilterExecutor(alloc, op, PushdownExecutorType::WHITE_FILTER_EXECUTOR),
-      null_param_contained_(false), params_(alloc), filter_(filter) {}
+      : ObPushdownFilterExecutor(alloc, op,
+                                 PushdownExecutorType::WHITE_FILTER_EXECUTOR),
+        null_param_contained_(false), params_(alloc),
+        min_param_idx_(UINT64_MAX), max_param_idx_(UINT64_MAX),
+        filter_(filter) {}
   ~ObWhiteFilterExecutor()
   {
     params_.reset();
@@ -454,6 +457,10 @@ public:
   OB_INLINE bool null_param_contained() const { return null_param_contained_; }
   int exist_in_obj_set(const common::ObObj &obj, bool &is_exist) const;
   bool is_obj_set_created() const { return param_set_.created(); };
+  OB_INLINE const ObObj &get_min_param() const { return params_.at(min_param_idx_); };
+  OB_INLINE const ObObj &get_max_param() const { return params_.at(max_param_idx_); };
+  OB_INLINE bool is_in_params(const ObObj& obj) const 
+  { return (obj <= params_.at(max_param_idx_)) && (obj >= params_.at(min_param_idx_)); };
   OB_INLINE ObWhiteFilterOperatorType get_op_type() const
   { return filter_.get_op_type(); }
   INHERIT_TO_STRING_KV("ObPushdownWhiteFilterExecutor", ObPushdownFilterExecutor,
@@ -461,11 +468,14 @@ public:
                        K_(filter));
 private:
   int eval_in_right_val_to_objs();
+  int eval_right_val_to_objs();
   void check_null_params();
   int init_obj_set();
 private:
   bool null_param_contained_;
   common::ObFixedArray<common::ObObj, common::ObIAllocator> params_;
+  uint64_t min_param_idx_;
+  uint64_t max_param_idx_;
   common::hash::ObHashSet<common::ObObj> param_set_;
   ObPushdownWhiteFilterNode &filter_;
 };

@@ -1000,26 +1000,60 @@ int ObDictDecoder::in_operator(
     LOG_WARN("Invalid argument for IN operator", K(ret),
              K(col_data), K(result_bitmap.size()), K(filter));
   } else {
-    const int64_t count = meta_header_->count_;
-    if (count > 0) {
-      bool found = false;
-      ObDictDecoderIterator traverse_it = begin(&col_ctx, col_ctx.col_header_->length_);
-      ObDictDecoderIterator end_it = end(&col_ctx, col_ctx.col_header_->length_);
+    if (meta_header_->count_ > 0) {
+      // iterators
+      ObDictDecoderIterator traverse_it;
+      const ObDictDecoderIterator begin_it = begin(&col_ctx, col_ctx.col_header_->length_);
+      const ObDictDecoderIterator end_it = end(&col_ctx, col_ctx.col_header_->length_);
+      // init ref_bitset
       const int64_t ref_bitset_size = meta_header_->count_ + 1;
       char ref_bitset_buf[sql::ObBitVector::memory_size(ref_bitset_size)];
       sql::ObBitVector *ref_bitset = sql::to_bit_vector(ref_bitset_buf);
       ref_bitset->init(ref_bitset_size);
+      // common variables
+      bool found = false;
       int64_t dict_ref = 0;
       bool is_exist = false;
-      while (OB_SUCC(ret) && traverse_it != end_it) {
-        if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
-          LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
-        } else if (is_exist) {
-          found = true;
-          ref_bitset->set(dict_ref);
+      if (meta_header_->is_sorted_dict()) {
+        // Sorted dictionary, binary search here to find boundary element
+        const ObObj &first_dict = *(begin(&col_ctx, col_ctx.col_header_->length_));
+        const ObObj &last_dict = *(end(&col_ctx, col_ctx.col_header_->length_) - 1);
+        const ObObj &min_param = filter.get_min_param();
+        const ObObj &max_param = filter.get_max_param();
+        if (last_dict < min_param || first_dict > max_param) {
+          LOG_DEBUG("Hit shortcut, no cross, return all-false bitmap", K(first_dict), K(last_dict));
+        } else {
+          ObDictDecoderIterator left_bound_inclusive = std::lower_bound(begin_it, end_it, min_param);
+          ObDictDecoderIterator right_bound_exclusive = std::upper_bound(begin_it, end_it, max_param);
+          traverse_it = left_bound_inclusive;
+          dict_ref = left_bound_inclusive - begin_it;
+          while (OB_SUCC(ret) && traverse_it != right_bound_exclusive) {
+            if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
+              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
+            } else if (is_exist) {
+              found = true;
+              ref_bitset->set(dict_ref);
+            }
+            ++traverse_it;
+            ++dict_ref;
+          }
         }
-        ++traverse_it;
-        ++dict_ref;
+      } else {
+        // Unsorted dictionary, Traverse dictionary
+        traverse_it = begin(&col_ctx, col_ctx.col_header_->length_);
+        while (OB_SUCC(ret) && traverse_it != end_it) {
+          if (filter.is_in_params(*traverse_it)) {
+            // fast pass element which is not in params
+            if (OB_FAIL(filter.exist_in_obj_set(*traverse_it, is_exist))) {
+              LOG_WARN("Failed to check object in hashset", K(ret), K(*traverse_it));
+            } else if (is_exist) {
+              found = true;
+              ref_bitset->set(dict_ref);
+            }
+          }
+          ++traverse_it;
+          ++dict_ref;
+        }
       }
       if (found && OB_FAIL(set_res_with_bitset(parent, col_ctx, col_data, ref_bitset, result_bitmap))) {
         LOG_WARN("Failed to set result bitmap", K(ret));
